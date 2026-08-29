@@ -144,3 +144,14 @@ technically impossible.
 See:
 
 `docs/adaptive-model-routing.md`
+
+## Mandatory Safety Gate
+
+Critical WRITE tasks must not begin solely because they were routed to Sol.
+
+Database migration, destructive data operations, authentication,
+authorization, and security-sensitive work require a separate READ-ONLY
+assessment before WRITE implementation unless the user explicitly provides
+an already-approved and independently verified execution plan.
+
+Model capability never implies filesystem authority.

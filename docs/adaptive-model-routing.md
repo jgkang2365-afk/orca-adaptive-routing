@@ -413,3 +413,47 @@ Do not route easy work to Sol merely because Sol is available.
 Do not route high-risk work to Luna merely because Luna is cheaper.
 
 Optimize total project cost and reliability, not the cost of one worker.
+
+## Mandatory Phase Separation
+
+Model selection and WRITE authority are separate decisions.
+
+For tasks involving database migration, authentication, authorization,
+security, destructive data operations, or meaningful production-data risk:
+
+1. Start with a READ-ONLY assessment task.
+2. Identify affected data, rollback requirements, dependencies, and failure modes.
+3. Only after assessment may the Coordinator dispatch a WRITE implementation task.
+4. Implementation and independent verification must remain separate assignments.
+
+A high-capability model does not justify skipping the READ-ONLY assessment phase.
+
+For complex external integrations involving async state, retries, timeouts,
+or synchronization:
+
+- prefer READ-ONLY diagnosis before WRITE implementation when the root cause
+  is not already established
+- combine diagnosis and implementation only when the change is sufficiently
+  localized and low-risk
+
+## Verification Threshold
+
+Do not create a Fresh Verifier merely because a task is complex.
+
+Fresh Verifier is:
+
+- required for destructive database migrations and meaningful data-loss risk
+- recommended for auth/security/architecture changes
+- conditional for async/external integrations based on actual regression risk
+- unnecessary for routine and ordinary localized changes
+
+## Escalation Ladder
+
+Do not skip capability levels without a concrete risk reason.
+
+Normal escalation:
+Luna/low -> Terra/medium -> Terra/high -> Sol/high
+
+Direct escalation to Sol/high is appropriate when newly discovered facts
+introduce authentication, authorization, security, destructive-data,
+architecture, or significant data-integrity risk.
