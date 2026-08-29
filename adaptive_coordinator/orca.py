@@ -239,6 +239,20 @@ class OrcaAdapter:
             ]
         )
 
+    def settle_escalation(self, run_id: str, worker: WorkerHandle, finding: str) -> None:
+        """Fence the reporting Dispatch before the Coordinator reclassifies it."""
+        self.runner(
+            [
+                self.executable,
+                "orchestration",
+                "worker-stop",
+                "--dispatch",
+                worker.dispatch_id,
+                "--json",
+            ]
+        )
+        self.fail_task(run_id, worker.task_id, f"superseded by Coordinator escalation: {finding}")
+
     def read_result(self, worker: WorkerHandle, limit: int = 200) -> dict[str, Any]:
         return self.runner(
             [

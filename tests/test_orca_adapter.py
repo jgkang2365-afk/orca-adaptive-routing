@@ -123,6 +123,16 @@ class OrcaAdapterTests(unittest.TestCase):
         payload = json.loads(update[update.index("--result") + 1])
         self.assertEqual(payload["settlement"], "coordinator_trusted_relay")
 
+    def test_escalation_is_fenced_before_task_is_superseded(self) -> None:
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        self.adapter.settle_escalation("run", worker, "async dependency")
+        self.assertEqual(
+            [command[1:3] for command in self.runner.commands],
+            [["orchestration", "worker-stop"], ["orchestration", "task-update"]],
+        )
+        update = self.runner.commands[-1]
+        self.assertEqual(update[update.index("--status") + 1], "failed")
+
 
 if __name__ == "__main__":
     unittest.main()

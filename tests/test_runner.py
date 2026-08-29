@@ -27,6 +27,7 @@ class FakeAdapter:
         self.relayed = []
         self.failed = []
         self.released = []
+        self.settled_escalations = []
         self._counter = 0
         self.change_detector = lambda: self.changes
 
@@ -71,6 +72,9 @@ class FakeAdapter:
 
     def fail_task(self, run_id, task_id, reason):
         self.failed.append((task_id, reason))
+
+    def settle_escalation(self, run_id, worker, finding):
+        self.settled_escalations.append((worker.dispatch_id, finding))
 
     def release(self, worker):
         self.released.append(worker.dispatch_id)
@@ -143,6 +147,36 @@ class RunnerContractTests(unittest.TestCase):
         self.assertIs(result.phase_list[0].status, PhaseStatus.ESCALATION_REQUESTED)
         self.assertEqual(adapter.routes[1].model, SOL)
         self.assertIs(adapter.routes[1].phase, Phase.ASSESSMENT)
+        self.assertEqual(len(adapter.settled_escalations), 1)
+
+    def test_escalated_active_plan_controls_conditional_verifier(self):
+        adapter = FakeAdapter(Path("/home/user/project"), modes=["escalation"])
+
+        def completion(run_id, worker, timeout_ms):
+            if adapter.modes:
+                adapter.modes.pop()
+                return {
+                    "mode": "escalation",
+                    "message": {"body": "async external API retry and timeout discovered"},
+                }
+            return {"mode": "worker_done", "message": {"status": "completed"}}
+
+        adapter.wait_for_completion = completion
+        result = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(
+            "Implement a small display fix.", "/home/user/project"
+        )
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual(result.classification, "complex")
+        self.assertEqual(result.routing_plan["level"], "complex")
+        self.assertEqual(
+            [route.phase for route in adapter.routes],
+            [
+                Phase.IMPLEMENTATION,
+                Phase.INVESTIGATION,
+                Phase.IMPLEMENTATION,
+                Phase.VERIFICATION,
+            ],
+        )
 
     def test_h_verifier_failure_propagates(self):
         result, _ = self.run_task(

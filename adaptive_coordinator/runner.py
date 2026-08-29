@@ -182,6 +182,7 @@ class ProductionRunner:
             return result
 
         queue = list(plan.routes)
+        active_plan = plan
         assessment_approved = False
         implementation_succeeded = False
         verifier_seen = False
@@ -223,6 +224,7 @@ class ProductionRunner:
 
                 if mode == "escalation":
                     finding = _summary(completion.get("message", completion))
+                    adapter.settle_escalation(run_id, worker, finding)
                     phase_result.status = PhaseStatus.ESCALATION_REQUESTED
                     phase_result.escalation = finding
                     result.phase_list.append(phase_result)
@@ -232,6 +234,8 @@ class ProductionRunner:
                         phase_result.error = "maximum Coordinator escalation count exceeded"
                         break
                     new_plan = self.router.reclassify(task, finding)
+                    active_plan = new_plan
+                    result.routing_plan = new_plan.to_dict()
                     result.escalation.append(
                         {
                             "finding": finding,
@@ -313,14 +317,14 @@ class ProductionRunner:
             and all(p.status in {PhaseStatus.SUCCESS, PhaseStatus.ESCALATION_REQUESTED} for p in result.phase_list)
             and not queue
         ):
-            if plan.verifier == "required" and not verifier_seen:
+            if active_plan.verifier == "required" and not verifier_seen:
                 result.final_status = PhaseStatus.FAILED
             else:
                 result.final_status = PhaseStatus.SUCCESS
         elif not result.phase_list:
             result.final_status = PhaseStatus.BLOCKED
 
-        if result.final_status is PhaseStatus.SUCCESS and plan.verifier == "conditional":
+        if result.final_status is PhaseStatus.SUCCESS and active_plan.verifier == "conditional":
             # Complex implementation gets independent verification only after an
             # actual successful WRITE phase; diagnosis-only runs stay lean.
             if implementation_succeeded and not verifier_seen:
