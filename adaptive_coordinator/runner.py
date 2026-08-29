@@ -302,12 +302,22 @@ class ProductionRunner:
             except CoordinatorError as exc:
                 phase_result.status = PhaseStatus.FAILED
                 phase_result.error = str(exc)
+                if phase_result.task_id is not None:
+                    try:
+                        adapter.fail_task(run_id, phase_result.task_id, str(exc))
+                    except Exception:
+                        pass
                 result.phase_list.append(phase_result)
                 result.final_status = PhaseStatus.FAILED
                 break
             except Exception as exc:
                 phase_result.status = PhaseStatus.BLOCKED
                 phase_result.error = str(exc)
+                if phase_result.task_id is not None:
+                    try:
+                        adapter.fail_task(run_id, phase_result.task_id, str(exc))
+                    except Exception:
+                        pass
                 result.phase_list.append(phase_result)
                 result.final_status = PhaseStatus.BLOCKED
                 break

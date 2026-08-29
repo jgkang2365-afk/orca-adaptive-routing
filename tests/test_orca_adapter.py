@@ -85,7 +85,7 @@ class OrcaAdapterTests(unittest.TestCase):
         launch_command = create[create.index("--command") + 1]
         self.assertIn("codex", launch_command)
         self.assertIn("read-only", launch_command)
-        self.assertIn("current", create)
+        self.assertIn("path:/home/user/project", create)
         self.assertIn("term_test", self.runner.commands[2])
 
     def test_critical_write_is_blocked_without_assessment(self) -> None:

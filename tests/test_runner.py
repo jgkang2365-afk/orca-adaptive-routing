@@ -216,6 +216,21 @@ class RunnerContractTests(unittest.TestCase):
         )
         self.assertIs(result.final_status, PhaseStatus.FAILED)
 
+    def test_worker_start_failure_settles_created_task(self):
+        adapter = FakeAdapter(Path("/home/user/project"))
+
+        def fail_start(*args, **kwargs):
+            from adaptive_coordinator.orca import CoordinatorError
+
+            raise CoordinatorError("placement rejected")
+
+        adapter.start_worker = fail_start
+        result = ProductionRunner(adapter_factory=lambda _: adapter).run(
+            "Inspect project metadata.", "/home/user/project"
+        )
+        self.assertIs(result.final_status, PhaseStatus.FAILED)
+        self.assertEqual(adapter.failed, [("task_1", "placement rejected")])
+
     def test_worker_summary_is_bounded_and_does_not_dump_full_transcript(self):
         payload = {
             "source": "terminal",

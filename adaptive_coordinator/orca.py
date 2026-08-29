@@ -168,7 +168,7 @@ class OrcaAdapter:
                 "terminal",
                 "create",
                 "--worktree",
-                "current",
+                f"path:{self.workspace}",
                 "--title",
                 f"adaptive-{route.phase.value}",
                 "--command",
