@@ -155,3 +155,11 @@ assessment before WRITE implementation unless the user explicitly provides
 an already-approved and independently verified execution plan.
 
 Model capability never implies filesystem authority.
+
+## WSL Worker Runtime
+
+Codex worker permission enforcement follows:
+
+`docs/wsl-worker-runtime.md`
+
+This runtime policy is mandatory for adaptive-routed Codex workers.
