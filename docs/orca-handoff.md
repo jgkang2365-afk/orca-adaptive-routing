@@ -2,9 +2,7 @@
 
 ## Task
 
-Classify the Windows canonical repository's 13 dirty files, preserve commit
-`c58e8a6`, synchronize the Windows and WSL repositories, and establish the
-standard Orca handoff file.
+Adaptive Coordinator v0.1
 
 ## Status
 
@@ -12,48 +10,74 @@ PASS
 
 ## Completed
 
-- Classified all 13 Windows dirty files as EOL-only changes.
-- Restored only the verified files and refreshed stale DrvFS index metadata.
-- Fast-forwarded the Windows canonical `main` from `7f0652a` to `c58e8a6`.
-- Added this handoff as the single current Orca completion record.
+- Implemented deterministic task classification and autonomous first-phase selection.
+- Implemented model, effort, authority, phase ordering, parallelism, verification,
+  and escalation decisions.
+- Connected policy-selected Codex terminals to Orca Runs, Tasks, and supervised
+  Dispatches.
+- Implemented normal `worker_done` collection, trusted Coordinator settlement,
+  launch rollback, and worker cleanup.
+- Passed all five routing scenarios and two live worker integrations.
 
 ## Changes
 
-- `AGENTS.md`: preserved the mandatory WSL worker runtime policy reference from
-  `c58e8a6`.
-- `docs/wsl-worker-runtime.md`: preserved the accepted WSL sandbox and trusted
-  Coordinator lifecycle relay policy from `c58e8a6`.
-- `docs/orca-handoff.md`: recorded the latest completed Orca task and next start
-  point.
-- No EOL-only change was committed as a functional change.
+- `adaptive_coordinator/models.py`: routing plan and route contracts.
+- `adaptive_coordinator/routing.py`: v0.1 classifier and reclassification.
+- `adaptive_coordinator/orca.py`: WSL launch, Orca lifecycle, result, settlement,
+  evidence, and release adapter.
+- `adaptive_coordinator/cli.py`: `route` and autonomous `launch` commands.
+- `tests/test_routing.py`: five scenario contracts and scoped-write regression.
+- `tests/test_orca_adapter.py`: sandbox, gate, lifecycle, relay, cleanup, and JSON
+  stream coverage.
+- `README.md`, `pyproject.toml`, `.gitignore`: usage, packaging, and build hygiene.
+
+## Routing Behavior
+
+- Routine inspection: Luna / low / read-only.
+- Ordinary implementation: Terra / medium / automatic-review workspace-write.
+- Async or external integration: Terra / high, READ diagnosis before WRITE Lead
+  when implementation is requested.
+- Critical risk: Sol / high READ assessment; WRITE cannot launch without separate
+  assessment approval; Fresh Verifier is independently planned.
+- New risk findings are reclassified by the Coordinator.
+- Model and authority are independent; `danger-full-access` is never generated.
+
+## Integration Tests
+
+- Test A: `run_b62fb4157f40`, `task_8f570ca6246b`, `ctx_e5b0238119cd`.
+  Luna / low / read-only blocked workspace and `/tmp` writes, returned normal
+  successful `worker_done`, and ended with released terminal accounting.
+- Test B: `run_422738dba509`, `task_cd2b90aeaa08`, `ctx_cf77202acf73`.
+  Terra / medium / `--approve-for-me` created, verified, and removed the fixture;
+  an outside-workspace write was blocked. Direct `worker_done` hit the known WSL
+  vsock boundary, so verified content-hash evidence was settled by trusted relay
+  and the terminal was released.
+- No integration probe file remains.
+
+## Verification
+
+- `python3 -m unittest discover -s tests -p 'test_*.py' -v`: 14 passed.
+- Python compilation and `git diff --check` passed.
+- Both integration Tasks are completed and both terminal resources are released.
+- Independent gpt-5.6-sol / high / read-only Fresh Verifier: `VERDICT: PASS`.
+- Existing routing and WSL runtime policy files were not changed.
 
 ## Git
 
 - Branch: `main`
-- Final HEAD: the handoff commit containing this file
-- Baseline before synchronization: `7f0652a`
-- Required preserved commit: `c58e8a6`
-- Working tree: clean after synchronization and verification
-- Remote: WSL `origin` is the Windows canonical local repository; no external
-  remote exists
-
-## Verification
-
-- Compared every dirty file with its HEAD blob after removing carriage returns;
-  all 13 were byte-for-byte identical.
-- Confirmed `git diff --quiet` and porcelain status were clean after targeted
-  restoration and index refresh.
-- Confirmed the update from `7f0652a` to `c58e8a6` was fast-forward-only.
-- Confirmed `c58e8a6` contains the required policy files and remains an ancestor
-  of the final history.
-- Confirmed Windows and WSL finish on the same history.
+- Baseline: `d45dd63`
+- Final HEAD: the Adaptive Coordinator v0.1 commit containing this handoff
+- WSL `origin`: Windows canonical local repository
+- External remote: none
+- Working tree: clean after final synchronization
 
 ## Safety
 
-- No reset, repository-wide restore, stash, rebase, force push, history rewrite,
-  remote change, or external publication was performed.
-- No meaningful user change was deleted or mixed with EOL-only changes.
-- WSL, Codex, Orca, sandbox settings, and other repositories were not changed.
+- No danger-full-access, sandbox weakening, global configuration change, remote
+  change, rebase, reset, force push, history rewrite, or repository-wide restore.
+- No environment or verified lifecycle hook changes.
+- Critical WRITE remains behind a separate READ-ONLY assessment.
+- Only exact integration worker terminals were stopped or closed.
 
 ## Remaining Issues
 
@@ -65,9 +89,8 @@ None.
 
 ## Next Start Point
 
-Begin the separate Adaptive Coordinator v0.1 implementation from the committed
-routing and WSL runtime policies. Start with Task classification into model,
-reasoning effort, filesystem authority, and WSL placement, then implement Codex
-worker launch, Orca Dispatch, result collection, normal `worker_done` or trusted
-Coordinator lifecycle settlement, and worker release. Do not repeat the completed
-environment, sandbox, or lifecycle relay validation.
+Use `python3 -m adaptive_coordinator route "<task>"` to inspect a decision or
+`python3 -m adaptive_coordinator launch "<task>"` to create the first
+policy-selected supervised worker. The next increment should add a durable loop
+that advances dependent phases, replies to questions, and acknowledges mailbox
+deliveries; do not repeat WSL sandbox or lifecycle relay validation.
