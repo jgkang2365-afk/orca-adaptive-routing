@@ -94,16 +94,30 @@ class OrcaAdapter:
         executable: str = "orca-ide",
         runner: Runner = _default_runner,
         change_detector: ChangeDetector | None = None,
+        worktree_selector: str | None = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         self.executable = executable
         self.runner = runner
         self.change_detector = change_detector or (lambda: _git_changes(self.workspace))
         self._validate_wsl_workspace()
+        self.worktree_selector = worktree_selector or self._resolve_orca_worktree_selector()
 
     def _validate_wsl_workspace(self) -> None:
         if platform.system() != "Linux" or not str(self.workspace).startswith("/home/"):
             raise SafetyGateError("Codex permission enforcement requires a WSL/Linux /home workspace")
+
+    def _resolve_orca_worktree_selector(self) -> str:
+        completed = subprocess.run(
+            ["wslpath", "-w", str(self.workspace)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        windows_path = completed.stdout.strip()
+        if completed.returncode or not windows_path.startswith("\\\\"):
+            raise SafetyGateError("Could not resolve the WSL workspace to an Orca worktree path")
+        return f"path:{windows_path}"
 
     def codex_command(self, route: Route) -> list[str]:
         if route.authority not in (Authority.READ_ONLY, Authority.WORKSPACE_WRITE):
@@ -168,7 +182,7 @@ class OrcaAdapter:
                 "terminal",
                 "create",
                 "--worktree",
-                f"path:{self.workspace}",
+                self.worktree_selector,
                 "--title",
                 f"adaptive-{route.phase.value}",
                 "--command",

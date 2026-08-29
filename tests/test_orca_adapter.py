@@ -55,7 +55,10 @@ class OrcaAdapterTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         patcher.start()
         self.adapter = OrcaAdapter(
-            "/home/user/project", runner=self.runner, change_detector=lambda: {}
+            "/home/user/project",
+            runner=self.runner,
+            change_detector=lambda: {},
+            worktree_selector=r"path:\\wsl.localhost\Ubuntu-24.04\home\user\project",
         )
 
     def test_read_only_command_is_enforced(self) -> None:
@@ -85,7 +88,10 @@ class OrcaAdapterTests(unittest.TestCase):
         launch_command = create[create.index("--command") + 1]
         self.assertIn("codex", launch_command)
         self.assertIn("read-only", launch_command)
-        self.assertIn("path:/home/user/project", create)
+        self.assertIn(
+            r"path:\\wsl.localhost\Ubuntu-24.04\home\user\project",
+            create,
+        )
         self.assertIn("term_test", self.runner.commands[2])
 
     def test_critical_write_is_blocked_without_assessment(self) -> None:
