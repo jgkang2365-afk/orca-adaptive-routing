@@ -2,112 +2,155 @@
 
 ## Task
 
-Pilot Run #1 — 2025/2026 Unpaid Companies
+Production Deployment + measurement-log-html Integration
 
 ## Status
 
-PASS
+BLOCKED
 
-## User Requirement
+## Base HEAD
 
-Inspect the complete 2025 and 2026 unpaid-company data set in the authenticated
-sales application, aggregate exact company-name duplicates, compare both years,
-verify totals and anomalies, and deliver the detailed business result only in the
-current Orca session.
+`2069756b356a41fe13232342117aed175c5c08db`
 
-## Coordinator Routing Decision
+## Final HEAD
 
-- Task decomposition: inspect the screen and year criterion; establish complete
-  row coverage; extract and aggregate; cross-check screen totals; independently
-  verify; settle and clean up; record a non-sensitive handoff.
-- Model and effort: `gpt-5.6-terra / medium` for the primary READ-only business
-  investigation; `gpt-5.6-sol / medium` for independent arithmetic verification.
-- Authority: site and repository investigation were READ-ONLY. The only project
-  WRITE was this final non-sensitive handoff.
-- Worker count: one investigation worker and one sequential Fresh Verifier.
-- Parallelism: sequential, avoiding contention in the shared authenticated browser
-  state. No extra worktree was created.
-- Browser strategy: use the existing authenticated Orca-managed browser profile,
-  inspect the rendered table DOM, use the screen's `매출년도` criterion, and use
-  filter changes only for safe READ-only completeness and total comparisons.
-- Verifier: justified because the rendered data set was large enough to benefit
-  from independent duplicate aggregation and arithmetic checks.
-- Escalation conditions were login loss, ambiguous year semantics, incomplete row
-  coverage, or a calculated-versus-screen discrepancy. None occurred.
+The handoff commit containing this file. The installed production code snapshot is
+`4156c099bddd3735468aa7b26e83f3f8f4d5acea`.
 
-## Business Result
+## Production Runner
 
-Detailed 2025/2026 unpaid-company names, row-level values, duplicate breakdown,
-and monetary totals were delivered to the user inside the Orca session.
+- Added `orca-adaptive run "<task>" --workspace <project>`.
+- `ProductionRunner` owns the complete `RoutingPlan` phase sequence while
+  `Router` and `OrcaAdapter` retain their existing responsibilities.
+- Supports SUCCESS, FAILED, BLOCKED, and ESCALATION_REQUESTED phase states.
+- Critical WRITE remains gated by successful READ-ONLY assessment.
+- Worker escalation is fenced and settled before Coordinator reclassification;
+  the reclassified active plan controls remaining phases and verification.
+- Conditional and required Fresh Verifiers are independent READ-ONLY workers.
+- Normal `worker_done` and evidence-checked trusted relay are supported.
+- Verifier and cleanup failures prevent PASS. Machine results contain bounded
+  evidence summaries rather than full terminal transcripts.
 
-Raw business names, monetary values, representative details, and transaction data
-were intentionally not persisted to Git or GitHub.
+## Tests
 
-## Completeness Verification
+- Existing routing and Orca adapter regression tests: PASS.
+- Production Runner A–J contracts and verifier-found regressions: PASS.
+- Total unit/contract tests: 37/37 PASS.
+- Python compilation, installer shell syntax, skill validation, and
+  `git diff --check`: PASS.
 
-- 2025 pagination: PASS — the year-filtered row count matched the screen result.
-- 2026 pagination: PASS — the year-filtered row count matched the screen result.
-- Full coverage: PASS — the rendered detail row count matched the screen's full
-  result count; there was no hidden page or additional scroll page.
-- Duplicate aggregation: PASS — exact company names were aggregated; uncertain
-  similar names were not merged.
-- Yearly totals: PASS — independently calculated totals matched both screen totals.
-- Overall total: PASS — two independent calculations agreed.
-- Discrepancy: none. No negative, zero, invalid monetary value, or row-level
-  sales-minus-payment reconciliation mismatch was detected.
+## Smoke
 
-## Approval Behavior
+- One low-risk READ-only repository inspection smoke: PASS.
+- Autonomous route: `gpt-5.6-luna / low / read-only`.
+- Result collection: PASS.
+- Direct lifecycle delivery crossed the known WSL boundary via evidence-checked
+  Coordinator trusted relay; sandbox authority was not expanded.
+- Worker release: PASS; the smoke worker terminal was closed.
 
-SAFE page reads, filters, DOM inspection, calculations, and Git checks did not
-require repeated user approval. No HIGH-RISK Decision Gate was needed.
+## Package Installation
 
-## Lifecycle
+- Installed version/commit: `0.1.0` /
+  `4156c099bddd3735468aa7b26e83f3f8f4d5acea`.
+- Command path: `/home/user/.local/bin/orca-adaptive`.
+- Fixed snapshot path:
+  `/home/user/.local/lib/orca-adaptive-routing/4156c099bddd3735468aa7b26e83f3f8f4d5acea`.
+- The source repository is not used as an editable runtime dependency.
+- Command help and route invocation succeeded outside the source directory.
 
-- The initial browser helper worker reported the unavailable local helper without
-  changing data; the Coordinator used the supported Orca-managed browser fallback.
-- The independent Fresh Verifier returned `VERDICT: PASS` from a separate
-  READ-ONLY session.
-- Pilot workers were completed rather than retained. The Pilot browser tab was
-  closed during cleanup, and no temporary export or probe file was retained.
+## Orca Skill
+
+- Installed path: `/home/user/.agents/skills/orca-adaptive-routing`.
+- Codex discovery link:
+  `/home/user/.codex/skills/orca-adaptive-routing`.
+- Role: direct multi-step project work through the installed production
+  Coordinator while leaving business rules in the target project's `AGENTS.md`.
+- Activation behavior: implicit discovery is enabled; trivial one-step actions are
+  excluded. It preserves high-risk Decision Gates and forbids manual sandbox or
+  model escalation bypasses.
+- Skill structure validation: PASS.
+
+## measurement-log-html Integration
+
+- Resolved repository:
+  `C:/Users/USER/Desktop/안티그래비티/측정일지_html`
+  (WSL view: `/mnt/c/Users/USER/Desktop/안티그래비티/측정일지_html`).
+- Orca repo id: `da9383fc-25c9-4de2-9a55-f92ede4b0658`.
+- Branch/HEAD observed: `main` /
+  `c0649258524ed328d279f48e9b0586f0b6343422`.
+- AGENTS integration: no project file was changed. Existing `AGENTS.md`,
+  `project_rules.md`, and `BUSINESS_LOGIC.md` were readable and preserved.
+- Project code changes: no.
+- Common command invocation and READ-only route-plan generation from the project
+  directory: PASS.
+- Ready for real work: no. The only available project paths are Windows/`/mnt/c`
+  workspaces, while enforced Codex authority requires an Orca-managed WSL
+  `/home` worktree. The Windows main also has 564 dirty entries and several
+  existing worktrees are in progress or review.
+
+## Fresh Verifier
+
+- Independent `gpt-5.6-sol / medium / read-only` verifier.
+- Runner implementation, assessment gate, failure propagation, escalation
+  settlement, bounded evidence, conditional verifier errors, fixed installation,
+  and Skill: PASS.
+- Overall verdict: BLOCKED because no safe WSL `/home` worktree exists for
+  measurement-log-html and the current Windows project state is actively dirty.
+
+## Lifecycle / Cleanup
+
+- Production smoke Dispatch settled and released.
+- No new measurement-log-html worker, worktree, terminal, or task was created.
+- Existing retained/release-unknown resources belonging to other historical runs
+  were not modified.
+- No temporary installation staging directory remains.
 
 ## Git
 
+- Implementation commits:
+  - `63f3162` — Production Runner and fixed-snapshot installer.
+  - `0c902fa` — active-plan escalation and settlement correction.
+  - `4156c09` — bounded evidence and verifier failure contract.
 - Branch: `main`.
-- Base HEAD: `e1eaebd1da99247a50b9951793705382de229acf`.
-- Change scope: this non-sensitive handoff only.
-- Final HEAD: the handoff commit containing this file.
-- Working tree must be clean after the final commit and push verification.
+- The Adaptive repository is clean after this handoff commit.
+- measurement-log-html Git state was inspected only and not altered.
 
 ## GitHub
 
-- Repository: `jgkang2365-afk/orca-adaptive-routing`.
-- Visibility: `PRIVATE`.
+- Repository: `jgkang2365-afk/orca-adaptive-routing` (PRIVATE).
 - Remote: `github`.
-- Push policy: normal non-force push to `main` only.
-- Local and GitHub `main` HEAD must match after final verification.
+- Final handoff is pushed normally without force or history rewriting.
+- Local and GitHub main HEAD are verified equal after the final push.
 
 ## Safety
 
-- Original site mutations: zero. No payment processing, status update, edit,
-  delete, save, registration, approval, invoice action, or mutation API was used.
-- No business names or monetary values are present in this handoff or any tracked
-  file. No download or raw export was committed.
-- No Adaptive Coordinator code, runtime policy, sandbox, lifecycle hook, remote,
-  environment, or other project was modified.
-- No force push, rebase, history rewrite, destructive Git command, or elevated
-  filesystem authority was used.
+- No `danger-full-access`, sandbox expansion, force push, rebase, reset, clean,
+  history rewrite, database mutation, or other-project file change.
+- Existing measurement-log-html dirty files, project rules, worktrees, workers,
+  terminals, and remotes were preserved.
+- The WSL `/home` authority boundary was not weakened to make a Windows
+  workspace launch.
 
 ## Remaining Issues
 
-None.
+- measurement-log-html needs a clean Orca-managed WSL `/home` project
+  setup/worktree before production workers can be launched.
+- The correct base branch and ownership timing must be chosen without colliding
+  with the current dirty main and in-progress/in-review worktrees.
 
 ## Decision Required
 
-None.
+Authorize a separate setup task to provision or identify a clean
+measurement-log-html WSL `/home` clone/worktree after coordinating the current
+Windows worktree ownership. Do not copy Coordinator source into that project or
+clean/reset its existing work.
 
 ## Next Start Point
 
-Independently review the Pilot's technical handoff and final commit from GitHub.
-Use the detailed result retained in the Orca session for the business-data review.
-If accepted, proceed to the separate Adaptive Coordinator common-operation
-deployment and packaging stage without extending v0.1 for this Pilot.
+Create or select the clean Orca-managed WSL `/home` measurement-log-html
+workspace, verify its project rules and branch ownership, then run:
+
+`orca-adaptive run "<next real user task>" --workspace "<resolved WSL path>"`
+
+After that gate is resolved: "측정일지_html에서 다음 실제 사용자 업무를
+Adaptive Coordinator를 통해 수행한다."
