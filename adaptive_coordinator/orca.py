@@ -217,6 +217,8 @@ class OrcaAdapter:
                     task_id,
                     "--terminal",
                     terminal_handle,
+                    "--worktree",
+                    self.worktree_selector,
                     "--json",
                 ]
             )

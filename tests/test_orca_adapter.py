@@ -92,7 +92,12 @@ class OrcaAdapterTests(unittest.TestCase):
             r"path:\\wsl.localhost\Ubuntu-24.04\home\user\project",
             create,
         )
-        self.assertIn("term_test", self.runner.commands[2])
+        worker_start = self.runner.commands[2]
+        self.assertIn("term_test", worker_start)
+        self.assertIn(
+            r"path:\\wsl.localhost\Ubuntu-24.04\home\user\project",
+            worker_start,
+        )
 
     def test_critical_write_is_blocked_without_assessment(self) -> None:
         with self.assertRaises(SafetyGateError):
