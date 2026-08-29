@@ -2,155 +2,124 @@
 
 ## Task
 
-Production Deployment + measurement-log-html Integration
+Final Field Deployment — measurement-log-html
 
 ## Status
 
-BLOCKED
+PASS
 
 ## Base HEAD
 
-`2069756b356a41fe13232342117aed175c5c08db`
+`8e4098ada2ee62833073acd0417aa397a7fb18b9`
 
 ## Final HEAD
 
-The handoff commit containing this file. The installed production code snapshot is
-`4156c099bddd3735468aa7b26e83f3f8f4d5acea`.
+The commit containing this handoff. The installed production code snapshot is
+`743d59d4346f2ee391f72c96d0cda9bed7b85503`.
 
-## Production Runner
+## Installer Hardening
 
-- Added `orca-adaptive run "<task>" --workspace <project>`.
-- `ProductionRunner` owns the complete `RoutingPlan` phase sequence while
-  `Router` and `OrcaAdapter` retain their existing responsibilities.
-- Supports SUCCESS, FAILED, BLOCKED, and ESCALATION_REQUESTED phase states.
-- Critical WRITE remains gated by successful READ-ONLY assessment.
-- Worker escalation is fenced and settled before Coordinator reclassification;
-  the reclassified active plan controls remaining phases and verification.
-- Conditional and required Fresh Verifiers are independent READ-ONLY workers.
-- Normal `worker_done` and evidence-checked trusted relay are supported.
-- Verifier and cleanup failures prevent PASS. Machine results contain bounded
-  evidence summaries rather than full terminal transcripts.
+- Dirty guard: any non-empty `git status --porcelain=v1 --untracked-files=all`
+  result rejects installation.
+- Untracked guard: an untracked file below `adaptive_coordinator/` is rejected.
+- Commit snapshot: the runtime payload is extracted from `git archive <HEAD>`;
+  working-tree files are not copied into production.
+- Regression tests I1–I5 passed for clean install, tracked dirty, staged dirty,
+  untracked dirty, metadata, and byte-for-byte committed payload matching.
+- Field placement fixes bind both terminal and supervised worker to the
+  explicitly resolved Orca WSL worktree.
 
-## Tests
+## Production Installation
 
-- Existing routing and Orca adapter regression tests: PASS.
-- Production Runner A–J contracts and verifier-found regressions: PASS.
-- Total unit/contract tests: 37/37 PASS.
-- Python compilation, installer shell syntax, skill validation, and
-  `git diff --check`: PASS.
-
-## Smoke
-
-- One low-risk READ-only repository inspection smoke: PASS.
-- Autonomous route: `gpt-5.6-luna / low / read-only`.
-- Result collection: PASS.
-- Direct lifecycle delivery crossed the known WSL boundary via evidence-checked
-  Coordinator trusted relay; sandbox authority was not expanded.
-- Worker release: PASS; the smoke worker terminal was closed.
-
-## Package Installation
-
-- Installed version/commit: `0.1.0` /
-  `4156c099bddd3735468aa7b26e83f3f8f4d5acea`.
+- Installed commit: `743d59d4346f2ee391f72c96d0cda9bed7b85503`.
+- Installed version: `0.1.0`.
 - Command path: `/home/user/.local/bin/orca-adaptive`.
-- Fixed snapshot path:
-  `/home/user/.local/lib/orca-adaptive-routing/4156c099bddd3735468aa7b26e83f3f8f4d5acea`.
-- The source repository is not used as an editable runtime dependency.
-- Command help and route invocation succeeded outside the source directory.
+- Snapshot path:
+  `/home/user/.local/lib/orca-adaptive-routing/743d59d4346f2ee391f72c96d0cda9bed7b85503`.
+- Help and autonomous READ-only routing succeeded outside the source repo.
 
-## Orca Skill
+## measurement-log-html Windows State
 
-- Installed path: `/home/user/.agents/skills/orca-adaptive-routing`.
-- Codex discovery link:
-  `/home/user/.codex/skills/orca-adaptive-routing`.
-- Role: direct multi-step project work through the installed production
-  Coordinator while leaving business rules in the target project's `AGENTS.md`.
-- Activation behavior: implicit discovery is enabled; trivial one-step actions are
-  excluded. It preserves high-risk Decision Gates and forbids manual sandbox or
-  model escalation bypasses.
-- Skill structure validation: PASS.
+- Path: `C:/Users/USER/Desktop/안티그래비티/측정일지_html`.
+- Branch/HEAD: `main` / `c0649258524ed328d279f48e9b0586f0b6343422`.
+- Dirty state: 564 porcelain entries, preserved unchanged.
+- Existing worktrees: main plus ten linked worktrees, all left untouched.
+- Modified by this task: NO.
 
-## measurement-log-html Integration
+## WSL Production Workspace
 
-- Resolved repository:
-  `C:/Users/USER/Desktop/안티그래비티/측정일지_html`
-  (WSL view: `/mnt/c/Users/USER/Desktop/안티그래비티/측정일지_html`).
-- Orca repo id: `da9383fc-25c9-4de2-9a55-f92ede4b0658`.
-- Branch/HEAD observed: `main` /
-  `c0649258524ed328d279f48e9b0586f0b6343422`.
-- AGENTS integration: no project file was changed. Existing `AGENTS.md`,
-  `project_rules.md`, and `BUSINESS_LOGIC.md` were readable and preserved.
-- Project code changes: no.
-- Common command invocation and READ-only route-plan generation from the project
-  directory: PASS.
-- Ready for real work: no. The only available project paths are Windows/`/mnt/c`
-  workspaces, while enforced Codex authority requires an Orca-managed WSL
-  `/home` worktree. The Windows main also has 564 dirty entries and several
-  existing worktrees are in progress or review.
+- Path: `/home/user/projects/measurement-log-html`.
+- Source: canonical `origin/main` from
+  `https://github.com/jgkang2365-afk/----_Html.git`; live remote main and
+  Windows committed main resolved to the same base commit.
+- Branch/HEAD: `main` / `c0649258524ed328d279f48e9b0586f0b6343422`.
+- Working tree: CLEAN on native WSL `/home`.
+- Orca repo id: `fb4b2263-d8d4-481f-80ac-5d0fe7251175`.
+- Orca worktree host platform: Linux (`Ubuntu-24.04`).
+
+## Project Rules
+
+- `AGENTS.md`: present and read.
+- `project_rules.md`: present and read.
+- `BUSINESS_LOGIC.md`: present and read.
+- Applicable `docs/business-rules/preliminary-survey.md` guidance was also read.
+- No project rule or source file was changed.
+
+## Onboarding Run
+
+- Run / Task / Dispatch: `run_744cf47aa570` /
+  `task_e27adf2fb554` / `ctx_63c0818cd440`.
+- Routing: routine Investigator, `gpt-5.6-luna / low / read-only`, one worker,
+  current registered WSL worktree.
+- Result: SUCCESS; project rules and structure were summarized.
+- File changes: none; the WSL clone remained clean.
+- Settlement: direct `worker_done` was accepted, followed by evidence-checked
+  Coordinator task settlement after the outer command wrapper ended.
+- Cleanup: Dispatch completed and the exact worker terminal is released; no
+  deployment-created live worker or terminal remains.
 
 ## Fresh Verifier
 
-- Independent `gpt-5.6-sol / medium / read-only` verifier.
-- Runner implementation, assessment gate, failure propagation, escalation
-  settlement, bounded evidence, conditional verifier errors, fixed installation,
-  and Skill: PASS.
-- Overall verdict: BLOCKED because no safe WSL `/home` worktree exists for
-  measurement-log-html and the current Windows project state is actively dirty.
-
-## Lifecycle / Cleanup
-
-- Production smoke Dispatch settled and released.
-- No new measurement-log-html worker, worktree, terminal, or task was created.
-- Existing retained/release-unknown resources belonging to other historical runs
-  were not modified.
-- No temporary installation staging directory remains.
+- Independent `gpt-5.6-sol / medium / read-only` verification: PASS.
+- Verified installer guards and commit payload, installed commit, native clean
+  WSL clone, preserved Windows state/worktrees, Orca Linux repo registration,
+  project-rule discovery, READ-only onboarding, and cleanup.
 
 ## Git
 
-- Implementation commits:
-  - `63f3162` — Production Runner and fixed-snapshot installer.
-  - `0c902fa` — active-plan escalation and settlement correction.
-  - `4156c09` — bounded evidence and verifier failure contract.
-- Branch: `main`.
-- The Adaptive repository is clean after this handoff commit.
-- measurement-log-html Git state was inspected only and not altered.
+- Installer hardening: `810e848`.
+- Explicit WSL terminal placement and failure settlement: `c6165ad`.
+- Orca UNC selector resolution: `ce203f0`.
+- Supervised worker worktree binding: `743d59d`.
+- Branch: `main`; final tree is clean after the handoff commit.
 
 ## GitHub
 
 - Repository: `jgkang2365-afk/orca-adaptive-routing` (PRIVATE).
 - Remote: `github`.
 - Final handoff is pushed normally without force or history rewriting.
-- Local and GitHub main HEAD are verified equal after the final push.
+- Local and GitHub `main` HEAD are verified equal after final push.
 
 ## Safety
 
-- No `danger-full-access`, sandbox expansion, force push, rebase, reset, clean,
-  history rewrite, database mutation, or other-project file change.
-- Existing measurement-log-html dirty files, project rules, worktrees, workers,
-  terminals, and remotes were preserved.
-- The WSL `/home` authority boundary was not weakened to make a Windows
-  workspace launch.
+- No Windows cleanup, reset, stash, worktree removal, worker termination,
+  rebase, force push, history rewrite, sandbox expansion, or
+  `danger-full-access` occurred.
+- Only committed Git history was cloned; none of the 564 uncommitted Windows
+  entries entered the WSL production workspace.
+- One-time Codex project trust was scoped to the clean canonical WSL clone;
+  worker authority remained technically read-only.
+- Existing unrelated Orca workers, terminals, tasks, and worktrees were not
+  changed.
 
 ## Remaining Issues
 
-- measurement-log-html needs a clean Orca-managed WSL `/home` project
-  setup/worktree before production workers can be launched.
-- The correct base branch and ownership timing must be chosen without colliding
-  with the current dirty main and in-progress/in-review worktrees.
+None.
 
 ## Decision Required
 
-Authorize a separate setup task to provision or identify a clean
-measurement-log-html WSL `/home` clone/worktree after coordinating the current
-Windows worktree ownership. Do not copy Coordinator source into that project or
-clean/reset its existing work.
+None.
 
 ## Next Start Point
 
-Create or select the clean Orca-managed WSL `/home` measurement-log-html
-workspace, verify its project rules and branch ownership, then run:
-
-`orca-adaptive run "<next real user task>" --workspace "<resolved WSL path>"`
-
-After that gate is resolved: "측정일지_html에서 다음 실제 사용자 업무를
-Adaptive Coordinator를 통해 수행한다."
+"측정일지_html에서 다음 실제 사용자 업무를 Adaptive Coordinator를 통해 수행한다."
