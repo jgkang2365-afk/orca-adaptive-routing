@@ -2,83 +2,105 @@
 
 ## Task
 
-Adaptive Coordinator v0.1
+Adaptive Coordinator v0.1 Final Acceptance
 
 ## Status
 
 PASS
 
-## Completed
+## Final HEAD
 
-- Implemented deterministic task classification and autonomous first-phase selection.
-- Implemented model, effort, authority, phase ordering, parallelism, verification,
-  and escalation decisions.
-- Connected policy-selected Codex terminals to Orca Runs, Tasks, and supervised
-  Dispatches.
-- Implemented normal `worker_done` collection, trusted Coordinator settlement,
-  launch rollback, and worker cleanup.
-- Passed all five routing scenarios and two live worker integrations.
+- Acceptance code HEAD: `b377e2bed15414cf3ad377e261b44d8a30addee4`
+- Repository final HEAD: the handoff commit containing this file
+- Branch: `main`
 
-## Changes
+## Routing Acceptance
 
-- `adaptive_coordinator/models.py`: routing plan and route contracts.
-- `adaptive_coordinator/routing.py`: v0.1 classifier and reclassification.
-- `adaptive_coordinator/orca.py`: WSL launch, Orca lifecycle, result, settlement,
-  evidence, and release adapter.
-- `adaptive_coordinator/cli.py`: `route` and autonomous `launch` commands.
-- `tests/test_routing.py`: five scenario contracts and scoped-write regression.
-- `tests/test_orca_adapter.py`: sandbox, gate, lifecycle, relay, cleanup, and JSON
-  stream coverage.
-- `README.md`, `pyproject.toml`, `.gitignore`: usage, packaging, and build hygiene.
+- Coordinator autonomously selects model, effort, authority, phase ordering,
+  parallelism, current WSL worktree placement, escalation, and verifier need.
+- Routine routes to Luna/low; standard work routes to Terra/medium; complex work
+  routes to Terra/high; critical work routes to Sol/high.
+- Model and authority remain independent. Ordinary code review is
+  Terra/medium/read-only, while implementation roles receive workspace-write.
+- Critical vocabulary floors cover migrations, schema/data risk, authentication,
+  authorization, security, architecture, destructive operations, rollback risk,
+  and high ambiguity.
+- Critical WRITE cannot launch before a separate read-only assessment.
+- `danger-full-access` is never generated.
 
-## Routing Behavior
+## Blind Tests
 
-- Routine inspection: Luna / low / read-only.
-- Ordinary implementation: Terra / medium / automatic-review workspace-write.
-- Async or external integration: Terra / high, READ diagnosis before WRITE Lead
-  when implementation is requested.
-- Critical risk: Sol / high READ assessment; WRITE cannot launch without separate
-  assessment approval; Fresh Verifier is independently planned.
-- New risk findings are reclassified by the Coordinator.
-- Model and authority are independent; `danger-full-access` is never generated.
+- Existing 01: Luna/low/read-only, single current worktree, no verifier — PASS.
+- Existing 02: Terra/medium/workspace-write, one Lead, no verifier — PASS.
+- Existing 03: Terra/high read diagnosis then write Lead, conditional verifier — PASS.
+- Existing 04: Sol/high read assessment, gated write, independent read verifier — PASS.
+- Existing 05: Luna/low initial route, then Coordinator reclassification to
+  critical Sol/high after new authorization/database/async findings — PASS.
+- New A config-key location search: Luna/low/read-only — PASS.
+- New B localized validation fix: Terra/medium/workspace-write — PASS.
+- New C authorization/data-visibility change: Sol/high assessment, gated write,
+  read-only Fresh Verifier — PASS.
+- Extra policy-floor probes for Alembic/drop-column, privilege escalation,
+  architecture/rollback, and ordinary code review — PASS.
 
 ## Integration Tests
 
-- Test A: `run_b62fb4157f40`, `task_8f570ca6246b`, `ctx_e5b0238119cd`.
-  Luna / low / read-only blocked workspace and `/tmp` writes, returned normal
-  successful `worker_done`, and ended with released terminal accounting.
-- Test B: `run_422738dba509`, `task_cd2b90aeaa08`, `ctx_cf77202acf73`.
-  Terra / medium / `--approve-for-me` created, verified, and removed the fixture;
-  an outside-workspace write was blocked. Direct `worker_done` hit the known WSL
-  vsock boundary, so verified content-hash evidence was settled by trusted relay
-  and the terminal was released.
-- No integration probe file remains.
+- A: `run_f52da99d127a` / `task_8aee04376ef9` / `ctx_6294e5f34f85`.
+  Coordinator selected Luna/low/read-only. Workspace and `/tmp` writes were
+  blocked. Orca rejected direct `worker_done` capability delivery; verified
+  zero-change evidence was completed through trusted Coordinator relay and the
+  exact terminal resource was released.
+- B: `run_637697f95260` / `task_a429eeb136af` / `ctx_9f042fefda92`.
+  Coordinator selected Terra/medium/workspace-write. A test fixture was created,
+  verified, and removed; `/home/user` outside-workspace write was blocked. Normal
+  `worker_done` completed and the exact terminal resource was released.
+- C: decision-only critical probe produced read assessment, assessment-gated
+  write, and independent Fresh Verifier phases. No database mutation occurred.
+- No acceptance probe file remains.
 
-## Verification
+## Approval Policy
 
-- `python3 -m unittest discover -s tests -p 'test_*.py' -v`: 14 passed.
-- Python compilation and `git diff --check` passed.
-- Both integration Tasks are completed and both terminal resources are released.
-- Independent gpt-5.6-sol / high / read-only Fresh Verifier: `VERDICT: PASS`.
-- Existing routing and WSL runtime policy files were not changed.
+- Read and write workers use `--ask-for-approval never`; SAFE work did not require
+  repeated user decisions.
+- Write workers use explicit `--sandbox workspace-write`. Automatic review was
+  disabled because Acceptance proved it could approve an outside-workspace patch.
+- No HIGH-RISK Decision Gate was needed or bypassed.
+
+## Sandbox / Authority
+
+- Read workers use explicit `--sandbox read-only` on Linux/WSL.
+- Write workers use explicit `--sandbox workspace-write` on Linux/WSL.
+- Workspace write succeeded and outside-workspace write was technically blocked.
+- Sandbox authority was never weakened for lifecycle delivery.
+
+## Lifecycle
+
+- Normal settlement and release passed in Integration B.
+- Trusted relay and release passed in Integration A after direct lifecycle
+  delivery rejection. Relay changed orchestration metadata only.
+- Both final Acceptance workers are released with no residual resources.
+
+## Fresh Verifier
+
+- Independent `gpt-5.6-sol` / high / read-only session.
+- Fresh checks: 16 unit tests, in-memory compilation, blind routing, policy-floor
+  probes, scoped live Orca evidence, sandbox argv, critical gate, relay, cleanup,
+  policy regression, and Git cleanliness.
+- Final result: `VERDICT: PASS`.
 
 ## Git
 
-- Branch: `main`
-- Baseline: `d45dd63`
-- Implementation commit: `4883806`
-- Final HEAD: the Adaptive Coordinator v0.1 commit containing this handoff
-- WSL `origin`: Windows canonical local repository
-- External remote: none
-- Working tree: clean after final synchronization
+- Baseline: `94ac32f`
+- Workspace-boundary fix: `cc00354`
+- Routing-floor fix: `b377e2b`
+- External remote: none; WSL origin remains the Windows canonical local repository.
+- No rebase, reset, force push, history rewrite, or remote change.
 
 ## Safety
 
-- No danger-full-access, sandbox weakening, global configuration change, remote
-  change, rebase, reset, force push, history rewrite, or repository-wide restore.
-- No environment or verified lifecycle hook changes.
-- Critical WRITE remains behind a separate READ-ONLY assessment.
-- Only exact integration worker terminals were stopped or closed.
+- No destructive migration, danger-full-access, sandbox expansion, environment
+  reconfiguration, lifecycle-hook modification, or other-project change.
+- Existing WSL/Linux permission-enforcement and trusted-relay policies are intact.
 
 ## Remaining Issues
 
@@ -90,8 +112,6 @@ None.
 
 ## Next Start Point
 
-Use `python3 -m adaptive_coordinator route "<task>"` to inspect a decision or
-`python3 -m adaptive_coordinator launch "<task>"` to create the first
-policy-selected supervised worker. The next increment should add a durable loop
-that advances dependent phases, replies to questions, and acknowledges mailbox
-deliveries; do not repeat WSL sandbox or lifecycle relay validation.
+Run one real, small Pilot task from user requirement through autonomous routing,
+Task decomposition, worker execution, verification, settlement, cleanup, and a
+new handoff. Do not extend v0.1 or repeat environment validation first.
