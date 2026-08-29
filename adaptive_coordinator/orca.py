@@ -120,9 +120,10 @@ class OrcaAdapter:
         if route.authority is Authority.READ_ONLY:
             command += ["--sandbox", "read-only", "--ask-for-approval", "never"]
         else:
-            # Codex 0.150.1 makes --approve-for-me mutually exclusive with
-            # --sandbox; the flag itself selects the workspace-write sandbox.
-            command += ["--approve-for-me"]
+            # Keep authority enforcement explicit. Automatic review can approve
+            # an outside-workspace request, while approval=never makes such a
+            # request fail without involving the user.
+            command += ["--sandbox", "workspace-write", "--ask-for-approval", "never"]
         command += ["--no-alt-screen"]
         return command
 

@@ -12,8 +12,8 @@ python3 -m adaptive_coordinator launch "Inspect the repository and list Markdown
 The router selects model, reasoning effort, authority, phase ordering, and
 verification requirements independently. Worker launches are restricted to a
 WSL/Linux workspace under `/home`: read tasks use `read-only` with approvals
-disabled, ordinary implementation uses Codex `--approve-for-me` (the supported
-automatic-review workspace-write mode),
+disabled, ordinary implementation uses explicit `workspace-write` with approvals
+disabled so outside-workspace requests fail rather than entering review,
 and `danger-full-access` is never generated. Critical WRITE phases cannot launch
 until their separate READ-ONLY assessment is explicitly recorded as complete.
 

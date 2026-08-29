@@ -70,10 +70,13 @@ class OrcaAdapterTests(unittest.TestCase):
         )
         self.assertTrue(payload["ok"])
 
-    def test_workspace_write_uses_automatic_review(self) -> None:
+    def test_workspace_write_is_explicit_and_non_interactive(self) -> None:
         command = self.adapter.codex_command(route(Authority.WORKSPACE_WRITE))
-        self.assertIn("--approve-for-me", command)
-        self.assertNotIn("--sandbox", command)
+        sandbox = command.index("--sandbox")
+        approval = command.index("--ask-for-approval")
+        self.assertEqual(command[sandbox + 1], "workspace-write")
+        self.assertEqual(command[approval + 1], "never")
+        self.assertNotIn("--approve-for-me", command)
 
     def test_worker_start_uses_custom_terminal_then_supervised_dispatch(self) -> None:
         worker = self.adapter.start_worker("run_test", "task_test", route(Authority.READ_ONLY))

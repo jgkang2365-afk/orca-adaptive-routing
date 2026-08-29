@@ -24,7 +24,7 @@ def _route(
         effort=effort,
         authority=authority,
         approval_grade="REVIEW" if write else "SAFE",
-        automatic_review=write,
+        automatic_review=False,
         requires_assessment=requires_assessment,
     )
 

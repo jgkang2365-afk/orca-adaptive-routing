@@ -28,7 +28,7 @@ class RoutingScenarioTests(unittest.TestCase):
         route = plan.routes[0]
         self.assertEqual((route.model, route.effort), (TERRA, "medium"))
         self.assertIs(route.authority, Authority.WORKSPACE_WRITE)
-        self.assertTrue(route.automatic_review)
+        self.assertFalse(route.automatic_review)
 
     def test_scoped_no_existing_file_change_does_not_cancel_fixture_write(self) -> None:
         plan = self.router.classify(
