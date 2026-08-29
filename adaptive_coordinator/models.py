@@ -52,4 +52,3 @@ class RoutingPlan:
             "escalation_triggers": list(self.escalation_triggers),
             "routes": [route.to_dict() for route in self.routes],
         }
-

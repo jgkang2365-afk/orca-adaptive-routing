@@ -4,4 +4,3 @@ from .models import Authority, Phase, Route, RoutingPlan
 from .routing import Router
 
 __all__ = ["Authority", "Phase", "Route", "Router", "RoutingPlan"]
-

@@ -66,6 +66,7 @@ PASS
 
 - Branch: `main`
 - Baseline: `d45dd63`
+- Implementation commit: `4883806`
 - Final HEAD: the Adaptive Coordinator v0.1 commit containing this handoff
 - WSL `origin`: Windows canonical local repository
 - External remote: none

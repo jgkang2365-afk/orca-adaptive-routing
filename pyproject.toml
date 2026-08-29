@@ -13,4 +13,3 @@ orca-adaptive = "adaptive_coordinator.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["adaptive_coordinator*"]
-
