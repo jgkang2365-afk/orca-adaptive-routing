@@ -2,91 +2,100 @@
 
 ## Task
 
-Sol Effort Policy Adjustment + GitHub Private Repository Setup
+Pilot Run #1 — 2025/2026 Unpaid Companies
 
 ## Status
 
 PASS
 
-## Final HEAD
+## User Requirement
 
-- Policy commit: `8401c76758100f634a5e3a8e1acc1bb0bf1634b8`
-- Final repository HEAD: the handoff commit containing this file
-- Branch: `main`
+Inspect the complete 2025 and 2026 unpaid-company data set in the authenticated
+sales application, aggregate exact company-name duplicates, compare both years,
+verify totals and anomalies, and deliver the detailed business result only in the
+current Orca session.
 
-## Sol Routing Policy
+## Coordinator Routing Decision
 
-- Critical default: `gpt-5.6-sol / medium`; READ assessment remains mandatory
-  before Critical WRITE.
-- Fresh Verifier default: `gpt-5.6-sol / medium / read-only`.
-- Sol/high escalation conditions: destructive migration, meaningful data-loss or
-  corruption risk, rollback uncertainty or difficulty, significant production
-  data-integrity impact, multi-layer auth complexity, vulnerability or attack-path
-  analysis, high-impact security, very large architecture impact, high ambiguity,
-  insufficient Sol/medium confidence, or repeated lower-tier reasoning failures.
-- Every Sol/high decision records its concrete reason. DB, auth, security,
-  architecture, or verifier labels alone do not select high.
-- Normal ladder: Luna/low → Terra/medium → Terra/high → Sol/medium → Sol/high.
+- Task decomposition: inspect the screen and year criterion; establish complete
+  row coverage; extract and aggregate; cross-check screen totals; independently
+  verify; settle and clean up; record a non-sensitive handoff.
+- Model and effort: `gpt-5.6-terra / medium` for the primary READ-only business
+  investigation; `gpt-5.6-sol / medium` for independent arithmetic verification.
+- Authority: site and repository investigation were READ-ONLY. The only project
+  WRITE was this final non-sensitive handoff.
+- Worker count: one investigation worker and one sequential Fresh Verifier.
+- Parallelism: sequential, avoiding contention in the shared authenticated browser
+  state. No extra worktree was created.
+- Browser strategy: use the existing authenticated Orca-managed browser profile,
+  inspect the rendered table DOM, use the screen's `매출년도` criterion, and use
+  filter changes only for safe READ-only completeness and total comparisons.
+- Verifier: justified because the rendered data set was large enough to benefit
+  from independent duplicate aggregation and arithmetic checks.
+- Escalation conditions were login loss, ambiguous year semantics, incomplete row
+  coverage, or a calculated-versus-screen discrepancy. None occurred.
 
-## Targeted Regression Tests
+## Business Result
 
-- S1 general authorization impact, explicit risk exclusions: Sol/medium read
-  assessment — PASS.
-- S2 reversible schema/migration planning: Sol/medium — PASS.
-- S3 destructive production migration with data-loss and rollback uncertainty:
-  Sol/high with concrete reasons — PASS.
-- S4 ordinary Critical Fresh Verifier: Sol/medium/read-only — PASS.
-- S5 data-loss, rollback, or high-impact security Fresh Verifier:
-  Sol/high/read-only — PASS.
-- S6 lower tiers: Routine Luna/low, Standard Terra/medium, Complex Terra/high — PASS.
-- Targeted routing suite: 12/12 PASS. Full unit suite: 20/20 PASS.
-- Compilation and `git diff --check`: PASS.
+Detailed 2025/2026 unpaid-company names, row-level values, duplicate breakdown,
+and monetary totals were delivered to the user inside the Orca session.
 
-## Fresh Verifier
+Raw business names, monetary values, representative details, and transaction data
+were intentionally not persisted to Git or GitHub.
 
-- Independent `gpt-5.6-sol / medium / read-only` verifier.
-- Verified S1–S6, explicit risk negation, hyphenated `data-loss`, high-reason
-  recording, Critical Safety Gate, model/authority independence,
-  `danger-full-access` prohibition, and documentation consistency.
-- Result: `VERDICT: PASS`.
+## Completeness Verification
 
-## GitHub
+- 2025 pagination: PASS — the year-filtered row count matched the screen result.
+- 2026 pagination: PASS — the year-filtered row count matched the screen result.
+- Full coverage: PASS — the rendered detail row count matched the screen's full
+  result count; there was no hidden page or additional scroll page.
+- Duplicate aggregation: PASS — exact company names were aggregated; uncertain
+  similar names were not merged.
+- Yearly totals: PASS — independently calculated totals matched both screen totals.
+- Overall total: PASS — two independent calculations agreed.
+- Discrepancy: none. No negative, zero, invalid monetary value, or row-level
+  sales-minus-payment reconciliation mismatch was detected.
 
-- Repository: `jgkang2365-afk/orca-adaptive-routing`
-- Owner: `jgkang2365-afk`
-- Visibility: `PRIVATE`
-- Remote: `github` → `https://github.com/jgkang2365-afk/orca-adaptive-routing.git`
-- Local HEAD: final handoff commit containing this file
-- GitHub main HEAD: must equal Local HEAD after the final normal push
-- Default branch: `main`
-- Required policy, runtime, handoff, implementation, and test files were verified
-  on GitHub main.
+## Approval Behavior
 
-## Approval Policy
+SAFE page reads, filters, DOM inspection, calculations, and Git checks did not
+require repeated user approval. No HIGH-RISK Decision Gate was needed.
 
-- The one expected Decision Gate approved creation of the new Private repository.
-- SAFE reads/tests and normal workspace/Git operations did not require policy
-  decisions. No HIGH-RISK operation was performed.
-- Future completion flow: work → verification → implementation commit → replace
-  `docs/orca-handoff.md` → handoff commit → GitHub main non-force push → verify
-  Local/GitHub HEAD equality.
-- Do not force or publish incomplete high-risk work. A BLOCKED handoff may be
-  recorded when safe, but unresolved dangerous changes must not be pushed.
+## Lifecycle
+
+- The initial browser helper worker reported the unavailable local helper without
+  changing data; the Coordinator used the supported Orca-managed browser fallback.
+- The independent Fresh Verifier returned `VERDICT: PASS` from a separate
+  READ-ONLY session.
+- Pilot workers were completed rather than retained. The Pilot browser tab was
+  closed during cleanup, and no temporary export or probe file was retained.
 
 ## Git
 
-- Existing `origin` remains the Windows canonical local repository.
-- New `github` remote is additive; the local-origin sync path was not replaced.
-- GitHub authentication uses a repo-local credential helper backed by the existing
-  authenticated Windows GitHub CLI; no token is stored in tracked files.
-- Pushes are normal non-force pushes. History is preserved unchanged.
+- Branch: `main`.
+- Base HEAD: `e1eaebd1da99247a50b9951793705382de229acf`.
+- Change scope: this non-sensitive handoff only.
+- Final HEAD: the handoff commit containing this file.
+- Working tree must be clean after the final commit and push verification.
+
+## GitHub
+
+- Repository: `jgkang2365-afk/orca-adaptive-routing`.
+- Visibility: `PRIVATE`.
+- Remote: `github`.
+- Push policy: normal non-force push to `main` only.
+- Local and GitHub `main` HEAD must match after final verification.
 
 ## Safety
 
-- No force push, rebase, reset, squash, history rewrite, public repository,
-  sandbox change, environment rebuild, lifecycle revalidation, or other-project
-  modification.
-- Existing Critical WRITE phase separation and filesystem authority policy remain.
+- Original site mutations: zero. No payment processing, status update, edit,
+  delete, save, registration, approval, invoice action, or mutation API was used.
+- No business names or monetary values are present in this handoff or any tracked
+  file. No download or raw export was committed.
+- No Adaptive Coordinator code, runtime policy, sandbox, lifecycle hook, remote,
+  environment, or other project was modified.
+- No force push, rebase, history rewrite, destructive Git command, or elevated
+  filesystem authority was used.
 
 ## Remaining Issues
 
@@ -98,6 +107,7 @@ None.
 
 ## Next Start Point
 
-Begin one real small-work Pilot Run from user requirement through autonomous task
-decomposition, routing, worker execution, verification, settlement, cleanup,
-handoff commit, and GitHub main normal push. Do not further extend v0.1 first.
+Independently review the Pilot's technical handoff and final commit from GitHub.
+Use the detailed result retained in the Orca session for the business-data review.
+If accepted, proceed to the separate Adaptive Coordinator common-operation
+deployment and packaging stage without extending v0.1 for this Pilot.
