@@ -2,7 +2,7 @@
 
 ## Task
 
-Adaptive Coordinator v0.1 Final Acceptance
+Sol Effort Policy Adjustment + GitHub Private Repository Setup
 
 ## Status
 
@@ -10,97 +10,83 @@ PASS
 
 ## Final HEAD
 
-- Acceptance code HEAD: `b377e2bed15414cf3ad377e261b44d8a30addee4`
-- Repository final HEAD: the handoff commit containing this file
+- Policy commit: `8401c76758100f634a5e3a8e1acc1bb0bf1634b8`
+- Final repository HEAD: the handoff commit containing this file
 - Branch: `main`
 
-## Routing Acceptance
+## Sol Routing Policy
 
-- Coordinator autonomously selects model, effort, authority, phase ordering,
-  parallelism, current WSL worktree placement, escalation, and verifier need.
-- Routine routes to Luna/low; standard work routes to Terra/medium; complex work
-  routes to Terra/high; critical work routes to Sol/high.
-- Model and authority remain independent. Ordinary code review is
-  Terra/medium/read-only, while implementation roles receive workspace-write.
-- Critical vocabulary floors cover migrations, schema/data risk, authentication,
-  authorization, security, architecture, destructive operations, rollback risk,
-  and high ambiguity.
-- Critical WRITE cannot launch before a separate read-only assessment.
-- `danger-full-access` is never generated.
+- Critical default: `gpt-5.6-sol / medium`; READ assessment remains mandatory
+  before Critical WRITE.
+- Fresh Verifier default: `gpt-5.6-sol / medium / read-only`.
+- Sol/high escalation conditions: destructive migration, meaningful data-loss or
+  corruption risk, rollback uncertainty or difficulty, significant production
+  data-integrity impact, multi-layer auth complexity, vulnerability or attack-path
+  analysis, high-impact security, very large architecture impact, high ambiguity,
+  insufficient Sol/medium confidence, or repeated lower-tier reasoning failures.
+- Every Sol/high decision records its concrete reason. DB, auth, security,
+  architecture, or verifier labels alone do not select high.
+- Normal ladder: Luna/low → Terra/medium → Terra/high → Sol/medium → Sol/high.
 
-## Blind Tests
+## Targeted Regression Tests
 
-- Existing 01: Luna/low/read-only, single current worktree, no verifier — PASS.
-- Existing 02: Terra/medium/workspace-write, one Lead, no verifier — PASS.
-- Existing 03: Terra/high read diagnosis then write Lead, conditional verifier — PASS.
-- Existing 04: Sol/high read assessment, gated write, independent read verifier — PASS.
-- Existing 05: Luna/low initial route, then Coordinator reclassification to
-  critical Sol/high after new authorization/database/async findings — PASS.
-- New A config-key location search: Luna/low/read-only — PASS.
-- New B localized validation fix: Terra/medium/workspace-write — PASS.
-- New C authorization/data-visibility change: Sol/high assessment, gated write,
-  read-only Fresh Verifier — PASS.
-- Extra policy-floor probes for Alembic/drop-column, privilege escalation,
-  architecture/rollback, and ordinary code review — PASS.
-
-## Integration Tests
-
-- A: `run_f52da99d127a` / `task_8aee04376ef9` / `ctx_6294e5f34f85`.
-  Coordinator selected Luna/low/read-only. Workspace and `/tmp` writes were
-  blocked. Orca rejected direct `worker_done` capability delivery; verified
-  zero-change evidence was completed through trusted Coordinator relay and the
-  exact terminal resource was released.
-- B: `run_637697f95260` / `task_a429eeb136af` / `ctx_9f042fefda92`.
-  Coordinator selected Terra/medium/workspace-write. A test fixture was created,
-  verified, and removed; `/home/user` outside-workspace write was blocked. Normal
-  `worker_done` completed and the exact terminal resource was released.
-- C: decision-only critical probe produced read assessment, assessment-gated
-  write, and independent Fresh Verifier phases. No database mutation occurred.
-- No acceptance probe file remains.
-
-## Approval Policy
-
-- Read and write workers use `--ask-for-approval never`; SAFE work did not require
-  repeated user decisions.
-- Write workers use explicit `--sandbox workspace-write`. Automatic review was
-  disabled because Acceptance proved it could approve an outside-workspace patch.
-- No HIGH-RISK Decision Gate was needed or bypassed.
-
-## Sandbox / Authority
-
-- Read workers use explicit `--sandbox read-only` on Linux/WSL.
-- Write workers use explicit `--sandbox workspace-write` on Linux/WSL.
-- Workspace write succeeded and outside-workspace write was technically blocked.
-- Sandbox authority was never weakened for lifecycle delivery.
-
-## Lifecycle
-
-- Normal settlement and release passed in Integration B.
-- Trusted relay and release passed in Integration A after direct lifecycle
-  delivery rejection. Relay changed orchestration metadata only.
-- Both final Acceptance workers are released with no residual resources.
+- S1 general authorization impact, explicit risk exclusions: Sol/medium read
+  assessment — PASS.
+- S2 reversible schema/migration planning: Sol/medium — PASS.
+- S3 destructive production migration with data-loss and rollback uncertainty:
+  Sol/high with concrete reasons — PASS.
+- S4 ordinary Critical Fresh Verifier: Sol/medium/read-only — PASS.
+- S5 data-loss, rollback, or high-impact security Fresh Verifier:
+  Sol/high/read-only — PASS.
+- S6 lower tiers: Routine Luna/low, Standard Terra/medium, Complex Terra/high — PASS.
+- Targeted routing suite: 12/12 PASS. Full unit suite: 20/20 PASS.
+- Compilation and `git diff --check`: PASS.
 
 ## Fresh Verifier
 
-- Independent `gpt-5.6-sol` / high / read-only session.
-- Fresh checks: 16 unit tests, in-memory compilation, blind routing, policy-floor
-  probes, scoped live Orca evidence, sandbox argv, critical gate, relay, cleanup,
-  policy regression, and Git cleanliness.
-- Final result: `VERDICT: PASS`.
+- Independent `gpt-5.6-sol / medium / read-only` verifier.
+- Verified S1–S6, explicit risk negation, hyphenated `data-loss`, high-reason
+  recording, Critical Safety Gate, model/authority independence,
+  `danger-full-access` prohibition, and documentation consistency.
+- Result: `VERDICT: PASS`.
+
+## GitHub
+
+- Repository: `jgkang2365-afk/orca-adaptive-routing`
+- Owner: `jgkang2365-afk`
+- Visibility: `PRIVATE`
+- Remote: `github` → `https://github.com/jgkang2365-afk/orca-adaptive-routing.git`
+- Local HEAD: final handoff commit containing this file
+- GitHub main HEAD: must equal Local HEAD after the final normal push
+- Default branch: `main`
+- Required policy, runtime, handoff, implementation, and test files were verified
+  on GitHub main.
+
+## Approval Policy
+
+- The one expected Decision Gate approved creation of the new Private repository.
+- SAFE reads/tests and normal workspace/Git operations did not require policy
+  decisions. No HIGH-RISK operation was performed.
+- Future completion flow: work → verification → implementation commit → replace
+  `docs/orca-handoff.md` → handoff commit → GitHub main non-force push → verify
+  Local/GitHub HEAD equality.
+- Do not force or publish incomplete high-risk work. A BLOCKED handoff may be
+  recorded when safe, but unresolved dangerous changes must not be pushed.
 
 ## Git
 
-- Baseline: `94ac32f`
-- Workspace-boundary fix: `cc00354`
-- Routing-floor fix: `b377e2b`
-- External remote: none; WSL origin remains the Windows canonical local repository.
-- No rebase, reset, force push, history rewrite, or remote change.
+- Existing `origin` remains the Windows canonical local repository.
+- New `github` remote is additive; the local-origin sync path was not replaced.
+- GitHub authentication uses a repo-local credential helper backed by the existing
+  authenticated Windows GitHub CLI; no token is stored in tracked files.
+- Pushes are normal non-force pushes. History is preserved unchanged.
 
 ## Safety
 
-- No destructive migration, danger-full-access, sandbox expansion, environment
-  reconfiguration, lifecycle-hook modification, or other-project change.
-- Existing WSL/Linux permission-enforcement and trusted-relay policies are intact.
+- No force push, rebase, reset, squash, history rewrite, public repository,
+  sandbox change, environment rebuild, lifecycle revalidation, or other-project
+  modification.
+- Existing Critical WRITE phase separation and filesystem authority policy remain.
 
 ## Remaining Issues
 
@@ -112,6 +98,6 @@ None.
 
 ## Next Start Point
 
-Run one real, small Pilot task from user requirement through autonomous routing,
-Task decomposition, worker execution, verification, settlement, cleanup, and a
-new handoff. Do not extend v0.1 or repeat environment validation first.
+Begin one real small-work Pilot Run from user requirement through autonomous task
+decomposition, routing, worker execution, verification, settlement, cleanup,
+handoff commit, and GitHub main normal push. Do not further extend v0.1 first.
