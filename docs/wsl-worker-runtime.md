@@ -56,8 +56,10 @@ Examples:
 - Luna / low / READ-ONLY
 - Terra / medium / workspace-write
 - Terra / high / READ-ONLY
-- Sol / high / READ-ONLY
-- Sol / high / workspace-write
+- Sol / medium / READ-ONLY
+- Sol / medium / workspace-write
+- Sol / high / READ-ONLY when a concrete high-risk escalation is recorded
+- Sol / high / workspace-write when separately gated and concretely escalated
 
 Selecting Sol never grants WRITE authority by itself.
 

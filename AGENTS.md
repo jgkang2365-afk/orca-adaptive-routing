@@ -40,12 +40,20 @@ Default routing:
   difficult debugging:
   gpt-5.6-terra / high
 
-- Security, authorization, architecture, database migration,
-  data-loss risk, or high ambiguity:
-  gpt-5.6-sol / high
+- Security, authorization, architecture, or database migration:
+  gpt-5.6-sol / medium by default
+
+- Destructive migration, meaningful data-loss or rollback risk, high-impact
+  security, very large architecture impact, or high ambiguity:
+  gpt-5.6-sol / high with the concrete escalation reason recorded
 
 - Independent fresh verification when justified:
-  gpt-5.6-sol / high / READ-ONLY
+  gpt-5.6-sol / medium / READ-ONLY by default
+
+Use Sol / high only when a concrete condition such as destructive migration,
+meaningful data-loss risk, rollback uncertainty, high-impact security analysis,
+very large architecture impact, high ambiguity, or insufficient Sol / medium
+confidence is present. Record the escalation reason in the routing decision.
 
 Do not start with a higher model merely because it is available.
 
@@ -60,6 +68,9 @@ Escalate a task only when one or more of the following occurs:
 - security, authorization, database integrity, or data-loss risk emerges
 
 Prefer increasing reasoning effort before increasing model class when appropriate.
+
+The normal ladder is Luna / low, Terra / medium, Terra / high, Sol / medium,
+then Sol / high.
 
 Workers must not autonomously spawn higher-tier workers.
 They report an escalation condition to the Coordinator.

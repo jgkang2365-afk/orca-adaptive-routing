@@ -144,7 +144,7 @@ Model:
 `gpt-5.6-sol`
 
 Effort:
-`high`
+`medium` by default
 
 Typical work:
 
@@ -157,6 +157,13 @@ Typical work:
 - high ambiguity
 - high regression cost
 - high-confidence root-cause analysis after failed lower-tier attempts
+
+Escalate to `high` only for a concrete condition such as destructive migration,
+meaningful data-loss or corruption risk, rollback uncertainty, significant
+production-data integrity impact, multi-layer auth complexity, security
+vulnerability or attack-path analysis, very large architecture impact, high
+ambiguity, or insufficient confidence at Sol / medium. The routing decision must
+record the concrete reason.
 
 Authority is task-specific.
 
@@ -188,6 +195,7 @@ Typical progression:
 Luna / low
 → Terra / medium
 → Terra / high
+→ Sol / medium
 → Sol / high
 
 Do not automatically advance one level after every error.
@@ -216,7 +224,10 @@ Use Sol / high when:
 ### Authentication / Authorization / Security
 
 Default:
-Sol / high
+Sol / medium
+
+Escalate to Sol / high for multi-layer auth complexity, high-impact security,
+vulnerability or attack-path analysis, or insufficient Sol / medium confidence.
 
 Independent verification:
 recommended
@@ -329,10 +340,14 @@ Model:
 gpt-5.6-sol
 
 Effort:
-high
+medium
 
 Authority:
 READ-ONLY
+
+Escalate a Fresh Verifier to high only for destructive migration, meaningful
+data-loss risk, rollback uncertainty, high-impact security, very large
+architecture impact, or a reported Sol / medium confidence failure.
 
 Verifier responsibilities:
 
@@ -452,8 +467,11 @@ Fresh Verifier is:
 Do not skip capability levels without a concrete risk reason.
 
 Normal escalation:
-Luna/low -> Terra/medium -> Terra/high -> Sol/high
+Luna/low -> Terra/medium -> Terra/high -> Sol/medium -> Sol/high
 
-Direct escalation to Sol/high is appropriate when newly discovered facts
-introduce authentication, authorization, security, destructive-data,
-architecture, or significant data-integrity risk.
+Sol/high requires a concrete high-risk reason: destructive migration, meaningful
+data-loss or corruption risk, rollback uncertainty, complex multi-layer auth,
+security vulnerability or attack-path analysis, very large architecture impact,
+high ambiguity, insufficient Sol/medium confidence, or repeated lower-tier
+reasoning failures. A DB, auth, security, architecture, or Fresh Verifier label
+alone is not sufficient.

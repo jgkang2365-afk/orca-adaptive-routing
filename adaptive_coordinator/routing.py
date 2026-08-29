@@ -41,6 +41,7 @@ class Router:
         "migrate existing data",
         "production data",
         "data loss",
+        "data-loss",
         "data integrity",
         "corrupt",
         "authentication",
@@ -54,6 +55,31 @@ class Router:
         "high ambiguity",
         "highly ambiguous",
     )
+    SOL_HIGH_RISKS = {
+        "destructive migration": "destructive migration",
+        "destroy production": "production data destruction",
+        "data loss": "meaningful data-loss risk",
+        "data-loss": "meaningful data-loss risk",
+        "lose production data": "production data-loss risk",
+        "corrupt": "data corruption risk",
+        "rollback is uncertain": "rollback uncertainty",
+        "rollback uncertain": "rollback uncertainty",
+        "rollback is difficult": "rollback difficulty",
+        "difficult rollback": "rollback difficulty",
+        "rollback impossible": "rollback impossible",
+        "production data integrity": "significant production data-integrity risk",
+        "multi-layer authentication": "multi-layer authentication complexity",
+        "multi-layer authorization": "multi-layer authorization complexity",
+        "attack path": "security attack-path analysis",
+        "attack vector": "security attack-vector analysis",
+        "security vulnerability": "security vulnerability analysis",
+        "high-impact security": "high-impact security risk",
+        "very large architecture": "very large architecture impact",
+        "high ambiguity": "high ambiguity",
+        "highly ambiguous": "high ambiguity",
+        "insufficient confidence": "Sol/medium confidence failure",
+        "repeated lower-tier failures": "repeated lower-tier reasoning failures",
+    }
     COMPLEX = (
         "external api",
         "external service",
@@ -92,8 +118,25 @@ class Router:
         write_requested = any(term in text for term in self.WRITE) and not global_read_only
 
         if critical:
+            high_risk_text = text
+            for marker in self.SOL_HIGH_RISKS:
+                for negation in (
+                    "no ",
+                    "without ",
+                    "not a ",
+                    "not an ",
+                    "does not involve ",
+                    "doesn't involve ",
+                ):
+                    high_risk_text = high_risk_text.replace(f"{negation}{marker}", "")
+            high_reasons = tuple(
+                reason
+                for marker, reason in self.SOL_HIGH_RISKS.items()
+                if marker in high_risk_text
+            )
+            sol_effort = "high" if high_reasons else "medium"
             routes = [
-                _route(Phase.ASSESSMENT, "Risk Assessor", SOL, "high", Authority.READ_ONLY)
+                _route(Phase.ASSESSMENT, "Risk Assessor", SOL, sol_effort, Authority.READ_ONLY)
             ]
             if write_requested:
                 routes.append(
@@ -101,17 +144,27 @@ class Router:
                         Phase.IMPLEMENTATION,
                         "Lead Implementer",
                         SOL,
-                        "high",
+                        sol_effort,
                         Authority.WORKSPACE_WRITE,
                         requires_assessment=True,
                     )
                 )
             routes.append(
-                _route(Phase.VERIFICATION, "Fresh Verifier", SOL, "high", Authority.READ_ONLY)
+                _route(
+                    Phase.VERIFICATION,
+                    "Fresh Verifier",
+                    SOL,
+                    sol_effort,
+                    Authority.READ_ONLY,
+                )
             )
             return RoutingPlan(
                 level="critical",
-                reason="Critical data, authorization, security, or destructive-risk floor.",
+                reason=(
+                    f"Sol/high escalation: {', '.join(high_reasons)}."
+                    if high_reasons
+                    else "Critical risk floor with Sol/medium default; no high-risk marker."
+                ),
                 routes=tuple(routes),
                 verifier="required" if "database" in text or "data" in text else "recommended",
                 escalation_triggers=("new permission boundary", "rollback uncertainty"),

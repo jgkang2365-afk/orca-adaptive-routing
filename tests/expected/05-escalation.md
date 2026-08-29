@@ -7,5 +7,7 @@ After new findings:
 - Worker reports escalation.
 - Worker must not autonomously spawn a stronger worker.
 - Coordinator reclassifies the task.
-- Authorization/data-integrity risk may require gpt-5.6-sol / high.
+- Authorization/data-integrity risk routes to gpt-5.6-sol / medium by default;
+  high requires a concrete destructive, rollback, data-loss, attack-path,
+  high-ambiguity, or confidence-failure reason.
 - WRITE authority is decided independently from model strength.
