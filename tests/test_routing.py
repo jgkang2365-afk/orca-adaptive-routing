@@ -70,6 +70,26 @@ class RoutingScenarioTests(unittest.TestCase):
         self.assertEqual(second.routes[0].model, SOL)
         self.assertIs(second.routes[0].authority, Authority.READ_ONLY)
 
+    def test_policy_floor_vocabulary_cannot_bypass_critical_gate(self) -> None:
+        for task in (
+            "Implement an Alembic migration that drops the users.email column.",
+            "Implement a security fix for privilege escalation.",
+            "Change the service architecture with a difficult rollback.",
+        ):
+            with self.subTest(task=task):
+                plan = self.router.classify(task)
+                self.assertEqual(plan.level, "critical")
+                self.assertIs(plan.routes[0].phase, Phase.ASSESSMENT)
+                self.assertIs(plan.routes[0].authority, Authority.READ_ONLY)
+                self.assertTrue(plan.routes[1].requires_assessment)
+
+    def test_standard_code_review_is_terra_read_only(self) -> None:
+        plan = self.router.classify("Review code in the validation module for ordinary bugs.")
+        route = plan.routes[0]
+        self.assertEqual(plan.level, "standard")
+        self.assertEqual((route.model, route.effort), (TERRA, "medium"))
+        self.assertIs(route.authority, Authority.READ_ONLY)
+
 
 if __name__ == "__main__":
     unittest.main()

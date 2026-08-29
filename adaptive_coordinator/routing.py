@@ -35,25 +35,42 @@ class Router:
     CRITICAL = (
         "database migration",
         "database schema",
+        "migration",
+        "alembic",
+        "drop column",
         "migrate existing data",
         "production data",
         "data loss",
+        "data integrity",
         "corrupt",
         "authentication",
         "authorization",
+        "security",
         "security-sensitive",
+        "privilege escalation",
+        "architecture",
         "destructive",
+        "rollback",
+        "high ambiguity",
+        "highly ambiguous",
     )
     COMPLEX = (
         "external api",
         "external service",
+        "external integration",
         "asynchronous",
         "async",
+        "retry",
         "retries",
         "timeout",
+        "concurrency",
         "state synchronization",
+        "state sync",
+        "multi-module",
+        "regression",
         "multiple services",
     )
+    STANDARD = ("code review", "review code", "unit test", "debug")
     WRITE = ("add ", "implement", "fix ", "change ", "refactor", "create ", "update ")
     ROUTINE = ("inspect", "list ", "inventory", "search", "discover", "metadata")
 
@@ -67,6 +84,7 @@ class Router:
         )
         critical = any(term in text for term in self.CRITICAL)
         complex_task = any(term in text for term in self.COMPLEX)
+        standard_task = any(term in text for term in self.STANDARD)
         global_read_only = any(
             phrase in text
             for phrase in ("do not modify files", "do not modify any files", "read-only only")
@@ -134,6 +152,17 @@ class Router:
                         "medium",
                         Authority.WORKSPACE_WRITE,
                     ),
+                ),
+                verifier="no",
+                escalation_triggers=("hidden architecture", "repeated reasoning failure"),
+            )
+
+        if standard_task:
+            return RoutingPlan(
+                level="standard",
+                reason="General review, test, or debugging analysis requires standard reasoning.",
+                routes=(
+                    _route(Phase.INVESTIGATION, "Reviewer", TERRA, "medium", Authority.READ_ONLY),
                 ),
                 verifier="no",
                 escalation_triggers=("hidden architecture", "repeated reasoning failure"),
