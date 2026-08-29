@@ -109,19 +109,30 @@ def _failure_reason(payload: Any) -> str | None:
 
 
 def _summary(payload: Any) -> str:
+    limit = 1_000
     if isinstance(payload, str):
-        return payload
+        return payload[:limit]
     if isinstance(payload, Mapping):
         for key in ("summary", "finalOutput", "output", "body", "text"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
-                return value.strip()
+                return value.strip()[:limit]
         for item in _messages(payload):
             for key in ("summary", "finalOutput", "output", "body", "text"):
                 value = item.get(key)
                 if isinstance(value, str) and value.strip():
-                    return value.strip()
-    return json.dumps(payload, ensure_ascii=False, default=str)
+                    return value.strip()[:limit]
+        terminal = payload.get("terminal")
+        if isinstance(terminal, Mapping):
+            tail = terminal.get("tail")
+            if isinstance(tail, Sequence) and not isinstance(tail, (str, bytes)):
+                lines = [str(line).strip() for line in tail[-12:] if str(line).strip()]
+                if lines:
+                    return "\n".join(lines)[-limit:]
+        status = payload.get("status")
+        source = payload.get("source")
+        return f"worker evidence available (status={status!s}, source={source!s})"
+    return f"worker evidence available ({type(payload).__name__})"
 
 
 def _public_worker_result(payload: Any) -> dict[str, Any]:
@@ -354,9 +365,20 @@ class ProductionRunner:
     def _has_completion_evidence(payload: Any) -> bool:
         if not isinstance(payload, Mapping):
             return bool(str(payload).strip())
-        text = _summary(payload)
+        has_output = any(
+            isinstance(payload.get(key), str) and bool(payload.get(key).strip())
+            for key in ("summary", "finalOutput", "output", "body", "text")
+        )
+        terminal = payload.get("terminal")
+        if isinstance(terminal, Mapping):
+            tail = terminal.get("tail")
+            has_output = has_output or (
+                isinstance(tail, Sequence)
+                and not isinstance(tail, (str, bytes))
+                and any(str(line).strip() for line in tail)
+            )
         state = str(payload.get("state") or payload.get("status") or "").lower()
-        return bool(text and text not in {"{}", "null"}) and state not in {
+        return has_output and state not in {
             "running",
             "active",
             "starting",
@@ -413,6 +435,14 @@ class ProductionRunner:
             phase.status = PhaseStatus.SUCCESS
             result.verifier_result = _public_worker_result(worker_result)
             return PhaseStatus.SUCCESS
+        except CoordinatorError as exc:
+            phase.status = PhaseStatus.FAILED
+            phase.error = str(exc)
+            return PhaseStatus.FAILED
+        except Exception as exc:
+            phase.status = PhaseStatus.BLOCKED
+            phase.error = str(exc)
+            return PhaseStatus.BLOCKED
         finally:
             if worker is not None:
                 try:

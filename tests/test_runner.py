@@ -6,7 +6,7 @@ from pathlib import Path
 
 from adaptive_coordinator.models import Authority, Phase
 from adaptive_coordinator.orca import WorkerHandle
-from adaptive_coordinator.runner import PhaseStatus, ProductionRunner
+from adaptive_coordinator.runner import PhaseStatus, ProductionRunner, _summary
 from adaptive_coordinator.routing import LUNA, SOL, TERRA, Router
 
 
@@ -215,6 +215,34 @@ class RunnerContractTests(unittest.TestCase):
             "Inspect Markdown files.", "/home/user/project"
         )
         self.assertIs(result.final_status, PhaseStatus.FAILED)
+
+    def test_worker_summary_is_bounded_and_does_not_dump_full_transcript(self):
+        payload = {
+            "source": "terminal",
+            "status": {"worker": "succeeded"},
+            "terminal": {"tail": ["secret-" + ("x" * 2_000)]},
+            "unrelated": "must-not-be-serialized",
+        }
+        summary = _summary(payload)
+        self.assertLessEqual(len(summary), 1_000)
+        self.assertNotIn("unrelated", summary)
+
+    def test_conditional_verifier_exception_returns_machine_status(self):
+        adapter = FakeAdapter(Path("/home/user/project"))
+        original_start = adapter.start_worker
+
+        def start(run_id, task_id, route, assessment_approved=False):
+            if route.phase is Phase.VERIFICATION:
+                raise RuntimeError("verifier launch unavailable")
+            return original_start(run_id, task_id, route, assessment_approved)
+
+        adapter.start_worker = start
+        result = ProductionRunner(adapter_factory=lambda _: adapter).run(
+            "Fix async external API retry timeout state sync.", "/home/user/project"
+        )
+        self.assertIs(result.final_status, PhaseStatus.BLOCKED)
+        self.assertIs(result.phase_list[-1].status, PhaseStatus.BLOCKED)
+        self.assertEqual(result.phase_list[-1].error, "verifier launch unavailable")
 
     def test_route_authority_never_derives_from_model(self):
         result, adapter = self.run_task("Review an authorization rule without changing it.")
