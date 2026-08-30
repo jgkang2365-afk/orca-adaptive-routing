@@ -598,6 +598,17 @@ class ProductionRunner:
                             "FAILED", "lifecycle deadline exhausted",
                             reason="no safe completion evidence before lifecycle deadline",
                         )
+                    elif (mode == "worker_done" and not safe_to_read
+                          and not isinstance(completion.get("result"), Mapping)):
+                        explicit_failure = FailureClassification(
+                            FailureClass.ORCHESTRATION_FAILURE, "high",
+                            "lifecycle_result_deadline_exhausted",
+                            ("Worker lifecycle settled without safe result evidence before deadline",),
+                        )
+                        normalized = NormalizedWorkerResult(
+                            "FAILED", "lifecycle result deadline exhausted",
+                            reason="no safe worker result evidence before lifecycle deadline",
+                        )
                     else:
                         raw = completion.get("result") if mode in {"worker_done", "timeout"} else None
                         if not isinstance(raw, Mapping) and safe_to_read:

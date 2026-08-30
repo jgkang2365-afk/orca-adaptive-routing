@@ -42,7 +42,7 @@ def _terminal_text(payload: Mapping[str, Any], limit: int) -> str:
     return text
 
 
-def _result_contract(value: Any) -> Mapping[str, Any] | None:
+def result_contract_mapping(value: Any) -> Mapping[str, Any] | None:
     if not (isinstance(value, Mapping) and value.get("status") is not None):
         return None
     if not any(key in value for key in (
@@ -132,7 +132,7 @@ def _decode_b64_result(
     error = _trailing_error(trailing, "ADAPTIVE_RESULT_B64")
     if error:
         return None, error
-    result = _result_contract(value)
+    result = result_contract_mapping(value)
     if result is None:
         return None, "final ADAPTIVE_RESULT_B64 does not satisfy the worker result contract"
     return result, None
@@ -151,7 +151,7 @@ def _decode_json_result(
     error = _trailing_error(text[end:], "ADAPTIVE_RESULT_JSON")
     if error:
         return None, error
-    result = _result_contract(value)
+    result = result_contract_mapping(value)
     if result is None:
         return None, "final ADAPTIVE_RESULT_JSON does not satisfy the worker result contract"
     return result, None

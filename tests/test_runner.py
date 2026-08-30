@@ -157,6 +157,81 @@ class RunnerContractTests(unittest.TestCase):
         self.assertEqual(len(adapter.routes), 1)
         self.assertEqual(adapter.released, ["dispatch_1"])
 
+    def test_polled_worker_done_result_succeeds_once_without_trusted_relay(self):
+        result_payload = {
+            "status": "completed", "summary": "policy inspection complete",
+            "conclusion": "scope inspected", "evidence": ["AGENTS.md"],
+            "files_checked": ["AGENTS.md"], "unresolved_questions": [],
+        }
+
+        class PolledLifecycleAdapter(FakeAdapter):
+            def wait_for_completion(self, run_id, worker, timeout_ms):
+                return {
+                    "mode": "worker_done",
+                    "message": {"type": "worker_done", "body": "Three sentence report."},
+                    "result": result_payload,
+                    "readiness": {"condition": "tui-idle", "satisfied": True},
+                }
+
+            def read_result(self, worker):
+                raise AssertionError("polled worker_done result must not be read twice")
+
+        adapter = PolledLifecycleAdapter(Path("/home/user/project"))
+        result = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(
+            "Inspect Markdown files. Do not modify files.", "/home/user/project"
+        )
+
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual(result.phase_list[0].settlement, "worker_done")
+        self.assertEqual(len(adapter.routes), 1)
+        self.assertEqual(adapter.relayed, [])
+        self.assertEqual(adapter.released, ["dispatch_1"])
+
+    def test_worker_done_deadline_without_result_never_rereads_or_succeeds(self):
+        class DeadlineLifecycleAdapter(FakeAdapter):
+            def wait_for_completion(self, run_id, worker, timeout_ms):
+                return {
+                    "mode": "worker_done", "safe_to_read": False,
+                    "message": {"type": "worker_done", "body": "Three sentence report."},
+                    "result": None,
+                }
+
+            def read_result(self, worker):
+                raise AssertionError("unsafe settled result must not be read")
+
+        adapter = DeadlineLifecycleAdapter(Path("/home/user/project"))
+        runner = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1)
+        failures = []
+        decide = runner.engine.decide
+
+        def capture_failure(gate, route, failure, **kwargs):
+            failures.append(failure)
+            return decide(gate, route, failure, **kwargs)
+
+        runner.engine.decide = capture_failure
+        result = runner.run(
+            "Inspect Markdown files. Do not modify files.", "/home/user/project"
+        )
+
+        self.assertIs(result.final_status, PhaseStatus.FAILED)
+        self.assertEqual(len(adapter.routes), 1)
+        self.assertEqual(
+            [(route.model, route.effort, route.authority) for route in adapter.routes],
+            [(LUNA, "low", Authority.READ_ONLY)],
+        )
+        self.assertEqual(adapter.relayed, [])
+        self.assertEqual(adapter.released, ["dispatch_1"])
+        attempt = result.logical_gates["investigation-1"].attempts[0]
+        self.assertEqual(attempt.failure_class, "ORCHESTRATION_FAILURE")
+        self.assertEqual(failures[0].reason_code, "lifecycle_result_deadline_exhausted")
+        self.assertEqual(failures[0].confidence, "high")
+        self.assertEqual(attempt.decision, "TERMINAL")
+        self.assertEqual(attempt.authority, "read-only")
+        self.assertEqual(
+            attempt.terminal_reason,
+            "ORCHESTRATION_FAILURE is not a model failure",
+        )
+
     def test_b_standard_write(self):
         result, adapter = self.run_task("Implement a small validation helper and unit test.")
         self.assertIs(result.final_status, PhaseStatus.SUCCESS)

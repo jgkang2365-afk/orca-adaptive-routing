@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from .models import Authority, Route
-from .result_sentinel import final_marked_structured_result
+from .result_sentinel import final_marked_structured_result, result_contract_mapping
 
 
 class CoordinatorError(RuntimeError):
@@ -589,26 +589,65 @@ class OrcaAdapter:
                 )
             return selected[0] if selected else None
 
+        def probe_terminal_result(
+            remaining_seconds: float,
+        ) -> tuple[dict[str, Any], Mapping[str, Any] | None]:
+            probe_timeout_ms = min(
+                self.LIFECYCLE_IDLE_PROBE_SLICE_MS,
+                max(1, int(remaining_seconds * 1000)),
+            )
+            probe_response = self.runner(
+                [
+                    self.executable, "terminal", "wait",
+                    "--terminal", worker.terminal_handle,
+                    "--for", "tui-idle",
+                    "--timeout-ms", str(probe_timeout_ms), "--json",
+                ]
+            )
+            probe_envelope = probe_response.get("wait")
+            readiness = (dict(probe_envelope)
+                         if isinstance(probe_envelope, Mapping) else probe_response)
+            if (
+                readiness.get("condition") == "tui-idle"
+                and readiness.get("satisfied") is True
+                and readiness.get("blockedReason") is None
+            ):
+                candidate = self.read_result(worker)
+                result, _ = final_marked_structured_result(candidate)
+                return readiness, result
+            return readiness, None
+
         def completion_from(
             message: Mapping[str, Any], source: Mapping[str, Any],
         ) -> dict[str, Any]:
             kind = message.get("type") or message.get("message_type")
             if kind == "worker_done":
-                structured = _bounded_json_mapping(message.get("body"))
+                structured = result_contract_mapping(
+                    _bounded_json_mapping(message.get("body"))
+                )
                 completion: dict[str, Any] = {
                     "mode": "worker_done", "message": message,
                     "result": structured, "delivery": source,
                 }
                 if structured is None:
-                    remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
-                    if remaining_ms <= 0:
-                        completion["safe_to_read"] = False
-                    else:
-                        completion["readiness"] = self._wait_for_tui_idle(
-                            worker.terminal_handle,
-                            remaining_ms,
-                            allow_update_skip=False,
-                        )
+                    while True:
+                        remaining_seconds = deadline - time.monotonic()
+                        if remaining_seconds <= 0:
+                            completion["safe_to_read"] = False
+                            break
+                        readiness, result = probe_terminal_result(remaining_seconds)
+                        if result is not None:
+                            completion["result"] = result
+                            completion["readiness"] = readiness
+                            break
+                        remaining_seconds = deadline - time.monotonic()
+                        if remaining_seconds <= 0:
+                            completion["safe_to_read"] = False
+                            break
+                        time.sleep(min(
+                            self.LIFECYCLE_CHECK_BACKOFF_SECONDS,
+                            remaining_seconds,
+                        ))
                 return completion
             return {"mode": str(kind), "message": message, "delivery": source}
 
@@ -655,36 +694,15 @@ class OrcaAdapter:
             if remaining_seconds <= 0:
                 break
             if not messages:
-                probe_timeout_ms = min(
-                    self.LIFECYCLE_IDLE_PROBE_SLICE_MS,
-                    max(1, int(remaining_seconds * 1000)),
-                )
-                probe_response = self.runner(
-                    [
-                        self.executable, "terminal", "wait",
-                        "--terminal", worker.terminal_handle,
-                        "--for", "tui-idle",
-                        "--timeout-ms", str(probe_timeout_ms), "--json",
-                    ]
-                )
-                probe_envelope = probe_response.get("wait")
-                readiness = (dict(probe_envelope)
-                             if isinstance(probe_envelope, Mapping) else probe_response)
-                if (
-                    readiness.get("condition") == "tui-idle"
-                    and readiness.get("satisfied") is True
-                    and readiness.get("blockedReason") is None
-                ):
-                    candidate = self.read_result(worker)
-                    result, _ = final_marked_structured_result(candidate)
-                    if result is not None:
-                        if delivery_to_ack:
-                            acknowledge(delivery_to_ack)
-                        return {
-                            "mode": "timeout", "delivery": delivery,
-                            "safe_to_read": True, "readiness": readiness,
-                            "result": result,
-                        }
+                readiness, result = probe_terminal_result(remaining_seconds)
+                if result is not None:
+                    if delivery_to_ack:
+                        acknowledge(delivery_to_ack)
+                    return {
+                        "mode": "timeout", "delivery": delivery,
+                        "safe_to_read": True, "readiness": readiness,
+                        "result": result,
+                    }
 
             remaining_seconds = deadline - time.monotonic()
             if remaining_seconds <= 0:
