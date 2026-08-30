@@ -137,6 +137,26 @@ class RunnerContractTests(unittest.TestCase):
         self.assertEqual(result.phase_list[0].settlement, "worker_done")
         self.assertEqual(len(adapter.routes), 1)
 
+    def test_prose_worker_done_fallback_keeps_settlement_and_single_dispatch(self):
+        class ProseLifecycleAdapter(FakeAdapter):
+            def wait_for_completion(self, run_id, worker, timeout_ms):
+                return {
+                    "mode": "worker_done",
+                    "message": {"type": "worker_done", "body": "Three sentence report."},
+                    "result": None,
+                    "readiness": {"condition": "tui-idle", "satisfied": True},
+                }
+
+        adapter = ProseLifecycleAdapter(Path("/home/user/project"))
+        result = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(
+            "Inspect Markdown files. Do not modify files.", "/home/user/project"
+        )
+
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual(result.phase_list[0].settlement, "worker_done")
+        self.assertEqual(len(adapter.routes), 1)
+        self.assertEqual(adapter.released, ["dispatch_1"])
+
     def test_b_standard_write(self):
         result, adapter = self.run_task("Implement a small validation helper and unit test.")
         self.assertIs(result.final_status, PhaseStatus.SUCCESS)
