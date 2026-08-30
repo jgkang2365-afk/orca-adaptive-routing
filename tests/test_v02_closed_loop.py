@@ -449,7 +449,14 @@ class OrcaGoldenPayloadTests(unittest.TestCase):
         for key, expected in (("worker_done", "worker_done"), ("escalation", "escalation")):
             adapter = object.__new__(OrcaAdapter)
             adapter.executable = "orca-ide"
-            adapter.runner = lambda command, payload=self.payloads[key]: payload
+            def lifecycle(command, payload=self.payloads[key]):
+                if command[1:3] == ["terminal", "wait"]:
+                    return {"wait": {
+                        "condition": "tui-idle", "satisfied": True,
+                        "status": "running", "blockedReason": None,
+                    }}
+                return payload
+            adapter.runner = lifecycle
             self.assertEqual(adapter.wait_for_completion("run", worker, 1)["mode"], expected)
 
     def test_timeout_fixture_evidence_transitions(self):

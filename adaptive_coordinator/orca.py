@@ -170,6 +170,7 @@ class OrcaAdapter:
     # registry.  These are readiness retries for the *same* terminal, not new
     # worker attempts and not a reason to change model capability.
     WORKER_START_READINESS_DELAYS = (0.25, 0.5, 1.0, 2.0)
+    LIFECYCLE_CHECK_BACKOFF_SECONDS = 0.05
 
     def __init__(
         self,
@@ -483,63 +484,81 @@ class OrcaAdapter:
 
     def wait_for_completion(self, run_id: str, worker: WorkerHandle, timeout_ms: int) -> dict[str, Any]:
         deadline = time.monotonic() + max(timeout_ms, 0) / 1000
-        delivery = self.runner(
-            [
-                self.executable,
-                "orchestration",
-                "check",
-                "--run",
-                run_id,
-                "--wait",
-                "--types",
-                "worker_done,escalation,question",
-                "--timeout-ms",
-                str(timeout_ms),
-                "--json",
-            ]
-        )
-        messages = delivery.get("messages") or delivery.get("delivery", {}).get("messages") or []
-        for message in messages:
-            kind = message.get("type") or message.get("message_type")
-            embedded = _bounded_json_mapping(message.get("payload")) or {}
-            dispatch_ids = tuple(
-                str(value) for value in (
-                    message.get("dispatch_id"), message.get("dispatchId"),
-                    embedded.get("dispatch_id"), embedded.get("dispatchId"),
-                ) if value is not None
+        check_timeout_ms = max(timeout_ms, 0)
+        delivery: dict[str, Any] = {}
+        while True:
+            delivery = self.runner(
+                [
+                    self.executable,
+                    "orchestration",
+                    "check",
+                    "--run",
+                    run_id,
+                    "--wait",
+                    "--types",
+                    "worker_done,escalation,question",
+                    "--timeout-ms",
+                    str(check_timeout_ms),
+                    "--json",
+                ]
             )
-            task_ids = tuple(
-                str(value) for value in (
-                    message.get("task_id"), message.get("taskId"),
-                    embedded.get("task_id"), embedded.get("taskId"),
-                ) if value is not None
-            )
-            # Contradictory or absent identity evidence never settles a worker.
-            identity_matches = (
-                bool(dispatch_ids)
-                and all(value == worker.dispatch_id for value in dispatch_ids)
-                and all(value == worker.task_id for value in task_ids)
-            )
-            if not identity_matches:
-                continue
-            if kind == "worker_done":
-                structured = _bounded_json_mapping(message.get("body"))
-                return {
-                    "mode": "worker_done", "message": message,
-                    "result": structured, "delivery": delivery,
-                }
-            if kind == "escalation":
-                return {"mode": "escalation", "message": message, "delivery": delivery}
-            if kind == "question":
-                return {"mode": "question", "message": message, "delivery": delivery}
-        # A lifecycle timeout is not evidence that the worker stopped writing
-        # its visible result.  Spend only the remainder of the original
-        # end-to-end timeout proving that the owned terminal reached the exact
-        # idle condition before the caller can read fallback evidence from it.
-        remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            messages = delivery.get("messages") or delivery.get("delivery", {}).get("messages") or []
+            for message in messages:
+                kind = message.get("type") or message.get("message_type")
+                embedded = _bounded_json_mapping(message.get("payload")) or {}
+                dispatch_ids = tuple(
+                    str(value) for value in (
+                        message.get("dispatch_id"), message.get("dispatchId"),
+                        embedded.get("dispatch_id"), embedded.get("dispatchId"),
+                    ) if value is not None
+                )
+                task_ids = tuple(
+                    str(value) for value in (
+                        message.get("task_id"), message.get("taskId"),
+                        embedded.get("task_id"), embedded.get("taskId"),
+                    ) if value is not None
+                )
+                # Contradictory or absent identity evidence never settles a worker.
+                identity_matches = (
+                    bool(dispatch_ids)
+                    and all(value == worker.dispatch_id for value in dispatch_ids)
+                    and all(value == worker.task_id for value in task_ids)
+                )
+                if not identity_matches:
+                    continue
+                if kind == "worker_done":
+                    structured = _bounded_json_mapping(message.get("body"))
+                    completion: dict[str, Any] = {
+                        "mode": "worker_done", "message": message,
+                        "result": structured, "delivery": delivery,
+                    }
+                    if structured is None:
+                        remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+                        completion["readiness"] = self._wait_for_tui_idle(
+                            worker.terminal_handle,
+                            remaining_ms,
+                            allow_update_skip=False,
+                        )
+                    return completion
+                if kind == "escalation":
+                    return {"mode": "escalation", "message": message, "delivery": delivery}
+                if kind == "question":
+                    return {"mode": "question", "message": message, "delivery": delivery}
+
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                break
+            time.sleep(min(self.LIFECYCLE_CHECK_BACKOFF_SECONDS, remaining_seconds))
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                break
+            check_timeout_ms = max(1, int(remaining_seconds * 1000))
+
+        # Only after the lifecycle deadline expires may terminal evidence act
+        # as a fallback. An exact idle probe prevents a still-streaming read.
         readiness = self._wait_for_tui_idle(
             worker.terminal_handle,
-            remaining_ms,
+            0,
             allow_update_skip=False,
         )
         return {"mode": "timeout", "delivery": delivery, "readiness": readiness}

@@ -438,6 +438,159 @@ class OrcaAdapterTests(unittest.TestCase):
         self.assertEqual(result["mode"], "worker_done")
         self.assertEqual(result["result"], structured)
 
+    def test_early_empty_check_repolls_nested_worker_done_then_waits_for_fallback(self) -> None:
+        worker = WorkerHandle("task", "dispatch", "owned-terminal", route(Authority.READ_ONLY))
+        original = self.adapter.runner
+        checks = 0
+        marker = {
+            "status": "completed",
+            "summary": "policy inspection complete",
+            "conclusion": "the policy is consistent",
+            "evidence": ["AGENTS.md"],
+            "files_checked": ["AGENTS.md"],
+            "unresolved_questions": [],
+        }
+
+        def delayed_delivery(command):
+            nonlocal checks
+            command = list(command)
+            if command[1:3] == ["orchestration", "check"]:
+                checks += 1
+                self.runner.commands.append(command)
+                if checks == 1:
+                    return {"messages": [], "timedOut": True}
+                return {"messages": [{
+                    "type": "worker_done",
+                    "body": "Inspected the policy. No files changed. No unresolved items.",
+                    "payload": json.dumps({
+                        "taskId": "task", "dispatchId": "dispatch",
+                        "outcome": "succeeded",
+                    }),
+                }]}
+            if command[1:3] == ["terminal", "wait"]:
+                self.runner.commands.append(command)
+                return {"wait": {
+                    "condition": "tui-idle", "satisfied": True,
+                    "status": "running", "blockedReason": None,
+                }}
+            if command[1:3] == ["orchestration", "worker-read"]:
+                self.runner.commands.append(command)
+                return {"terminal": {"tail": [
+                    "ADAPTIVE_RESULT_JSON:"
+                    + json.dumps(marker, separators=(",", ":"))
+                ]}}
+            return original(command)
+
+        self.adapter.runner = delayed_delivery
+        with patch("adaptive_coordinator.orca.time.monotonic",
+                   side_effect=(0.0, 1.0, 2.0, 3.0)), \
+                patch("adaptive_coordinator.orca.time.sleep") as sleep:
+            completion = self.adapter.wait_for_completion("run", worker, 10000)
+        raw = self.adapter.read_result(worker)
+
+        self.assertEqual(completion["mode"], "worker_done")
+        self.assertIsNone(completion["result"])
+        self.assertEqual(completion["readiness"]["condition"], "tui-idle")
+        self.assertEqual(ResultNormalizer.normalize(raw).status, "COMPLETED")
+        self.assertEqual(
+            [command[1:3] for command in self.runner.commands],
+            [["orchestration", "check"], ["orchestration", "check"],
+             ["terminal", "wait"], ["orchestration", "worker-read"]],
+        )
+        check_timeouts = [
+            command[command.index("--timeout-ms") + 1]
+            for command in self.runner.commands[:2]
+        ]
+        self.assertEqual(check_timeouts, ["10000", "8000"])
+        terminal_wait = self.runner.commands[2]
+        self.assertEqual(terminal_wait[terminal_wait.index("--timeout-ms") + 1], "7000")
+        sleep.assert_called_once_with(self.adapter.LIFECYCLE_CHECK_BACKOFF_SECONDS)
+        self.assertFalse(any(command[1:3] == ["orchestration", "worker-start"]
+                             for command in self.runner.commands))
+
+    def test_early_empty_check_preserves_nested_question_and_escalation(self) -> None:
+        worker = WorkerHandle("task", "dispatch", "owned-terminal", route(Authority.READ_ONLY))
+        for kind in ("question", "escalation"):
+            with self.subTest(kind=kind):
+                runner = FakeRunner()
+                adapter = OrcaAdapter(
+                    "/home/user/projects/test", runner=runner,
+                    worktree_selector="path:test", change_detector=lambda: {},
+                )
+                checks = 0
+
+                def delayed_event(command):
+                    nonlocal checks
+                    command = list(command)
+                    if command[1:3] == ["orchestration", "check"]:
+                        checks += 1
+                        runner.commands.append(command)
+                        if checks == 1:
+                            return {"messages": []}
+                        return {"messages": [{
+                            "type": kind,
+                            "body": "Coordinator action required",
+                            "payload": json.dumps({
+                                "taskId": "task", "dispatchId": "dispatch",
+                            }),
+                        }]}
+                    raise AssertionError(command)
+
+                adapter.runner = delayed_event
+                with patch("adaptive_coordinator.orca.time.monotonic",
+                           side_effect=(0.0, 1.0, 2.0)), \
+                        patch("adaptive_coordinator.orca.time.sleep") as sleep:
+                    completion = adapter.wait_for_completion("run", worker, 10000)
+
+                self.assertEqual(completion["mode"], kind)
+                self.assertEqual(
+                    [command[1:3] for command in runner.commands],
+                    [["orchestration", "check"], ["orchestration", "check"]],
+                )
+                sleep.assert_called_once_with(adapter.LIFECYCLE_CHECK_BACKOFF_SECONDS)
+
+    def test_empty_checks_stop_at_deadline_without_busy_loop_or_fallback_read(self) -> None:
+        runner = FakeRunner()
+        adapter = OrcaAdapter(
+            "/home/user/projects/test", runner=runner,
+            worktree_selector="path:test", change_detector=lambda: {},
+        )
+
+        def no_delivery(command):
+            command = list(command)
+            if command[1:3] == ["orchestration", "check"]:
+                runner.commands.append(command)
+                return {"messages": [], "timedOut": True}
+            if command[1:3] == ["terminal", "wait"]:
+                runner.commands.append(command)
+                return {"wait": {
+                    "condition": "tui-idle", "satisfied": False,
+                    "status": "timeout", "blockedReason": None,
+                }}
+            if command[1:3] == ["orchestration", "worker-read"]:
+                raise AssertionError("deadline exhaustion must not read a working terminal")
+            raise AssertionError(command)
+
+        adapter.runner = no_delivery
+        worker = WorkerHandle("task", "dispatch", "owned-terminal", route(Authority.READ_ONLY))
+        with patch("adaptive_coordinator.orca.time.monotonic",
+                   side_effect=(0.0, 1.0, 2.0, 10.0)), \
+                patch("adaptive_coordinator.orca.time.sleep") as sleep:
+            with self.assertRaises(CoordinatorError) as raised:
+                adapter.wait_for_completion("run", worker, 10000)
+
+        self.assertEqual(raised.exception.code, "agent_readiness_blocked")
+        self.assertEqual(
+            [command[1:3] for command in runner.commands],
+            [["orchestration", "check"], ["orchestration", "check"],
+             ["terminal", "wait"]],
+        )
+        self.assertEqual(
+            [command[command.index("--timeout-ms") + 1] for command in runner.commands],
+            ["10000", "8000", "0"],
+        )
+        sleep.assert_called_once_with(adapter.LIFECYCLE_CHECK_BACKOFF_SECONDS)
+
     def test_worker_done_identity_mismatch_or_malformed_payload_is_ignored(self) -> None:
         worker = WorkerHandle("task", "dispatch", "owned-terminal", route(Authority.READ_ONLY))
         messages = (
@@ -520,7 +673,9 @@ class OrcaAdapterTests(unittest.TestCase):
             return original(command)
 
         self.adapter.runner = completion_race
-        with patch("adaptive_coordinator.orca.time.monotonic", side_effect=(10.0, 11.0)):
+        with patch("adaptive_coordinator.orca.time.monotonic",
+                   side_effect=(10.0, 11.0, 15.0)), \
+                patch("adaptive_coordinator.orca.time.sleep") as sleep:
             completion = self.adapter.wait_for_completion("run", worker, 5000)
         raw = self.adapter.read_result(worker)
         normalized = ResultNormalizer.normalize(raw)
@@ -539,7 +694,8 @@ class OrcaAdapterTests(unittest.TestCase):
         wait = self.runner.commands[1]
         self.assertEqual(wait[wait.index("--terminal") + 1], "owned-terminal")
         self.assertEqual(wait[wait.index("--for") + 1], "tui-idle")
-        self.assertEqual(wait[wait.index("--timeout-ms") + 1], "4000")
+        self.assertEqual(wait[wait.index("--timeout-ms") + 1], "0")
+        sleep.assert_called_once_with(self.adapter.LIFECYCLE_CHECK_BACKOFF_SECONDS)
 
     def test_completion_true_timeout_or_malformed_readiness_fails_closed(self) -> None:
         responses = (
