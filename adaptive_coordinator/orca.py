@@ -470,6 +470,7 @@ class OrcaAdapter:
         )
 
     def wait_for_completion(self, run_id: str, worker: WorkerHandle, timeout_ms: int) -> dict[str, Any]:
+        deadline = time.monotonic() + max(timeout_ms, 0) / 1000
         delivery = self.runner(
             [
                 self.executable,
@@ -495,7 +496,17 @@ class OrcaAdapter:
                 return {"mode": "escalation", "message": message, "delivery": delivery}
             if kind == "question" and dispatch_id == worker.dispatch_id:
                 return {"mode": "question", "message": message, "delivery": delivery}
-        return {"mode": "timeout", "delivery": delivery}
+        # A lifecycle timeout is not evidence that the worker stopped writing
+        # its visible result.  Spend only the remainder of the original
+        # end-to-end timeout proving that the owned terminal reached the exact
+        # idle condition before the caller can read fallback evidence from it.
+        remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+        readiness = self._wait_for_tui_idle(
+            worker.terminal_handle,
+            remaining_ms,
+            allow_update_skip=False,
+        )
+        return {"mode": "timeout", "delivery": delivery, "readiness": readiness}
 
     def trusted_relay(
         self,
