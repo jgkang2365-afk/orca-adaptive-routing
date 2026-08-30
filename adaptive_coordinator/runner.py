@@ -940,16 +940,18 @@ class ProductionRunner:
                 f"including status, summary and: {contract}. The summary string itself must be exactly three sentences. "
                 f"Evidence packet (bounded): {packet}. Report escalation findings to the Coordinator. "
                 "Serialize the complete object as compact UTF-8 JSON and keep it in memory (for example, a shell "
-                "variable). Before attempting lifecycle delivery, prepare the base64url fallback representation of "
-                "those exact JSON bytes in memory. Do not create a temporary file or write anywhere to prepare the "
-                "fallback: READ-ONLY workers cannot write to /tmp or the workspace. A shell pipeline such as printf "
-                "piped to base64 and tr may be used to populate another shell variable before worker_done. "
-                "Attempt worker_done exactly once with --body equal to that compact JSON object. Never call worker_done twice. "
-                "If worker_done succeeds, stop immediately: do not print a marker, emit prose, or call another tool. "
-                "If and only if worker_done fails to deliver, print exactly one final visible framed marker "
+                "variable). Before lifecycle delivery, prepare the base64url representation of those exact JSON bytes "
+                "in memory. Do not create a temporary file or write anywhere to prepare it: READ-ONLY workers cannot "
+                "write to /tmp or the workspace. A shell pipeline such as printf piped to base64 and tr may populate "
+                "another shell variable. Keep the exact three-sentence summary in a separate variable. "
+                "Your final tool call must be one shell compound command: attempt worker_done exactly once with --body "
+                "equal to the three-sentence summary, then regardless of its exit status print exactly one final visible "
+                "framed marker from the already prepared in-memory value. Never call worker_done twice. The marker is "
+                "durable terminal evidence for the Coordinator when a successful CLI response is not delivered through "
+                "the Orca inbox; it is not a second lifecycle message. Use this marker: "
                 "ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON, padding optional>:END_ADAPTIVE_RESULT "
                 "encoding the same compact JSON object. Whitespace inside the base64url payload is allowed for terminal "
-                "wrapping. After the fallback marker, emit no prose and call no tool.")
+                "wrapping. Make the marker the final command output; after it, emit no prose and call no tool.")
 
     @staticmethod
     def _changed_paths(before: Mapping[str, str], after: Mapping[str, str]) -> list[str]:
