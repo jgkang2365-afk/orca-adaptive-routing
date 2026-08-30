@@ -72,16 +72,21 @@ ceiling; Sol/max is outside v0.2.
 
 `LIFECYCLE_DONE != TASK_SUCCESS`. `worker_done` only closes the worker lifecycle.
 
-Every dispatched phase attempts `worker_done` exactly once and then ends its
-visible response with one final framed
+Every dispatched phase first constructs one complete result object satisfying
+its phase contract. The object's `summary` string is exactly three sentences.
+The worker serializes the object as compact UTF-8 JSON and attempts
+`worker_done` exactly once with that JSON as `--body`. A successful lifecycle
+delivery ends the turn immediately with no marker, prose, or further tool call.
+If and only if that delivery fails, the worker prints one final framed
 `ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON>:END_ADAPTIVE_RESULT`
-marker, regardless of lifecycle delivery success. Padding is optional and
-terminal-inserted whitespace inside the base64url payload is ignored. No tool
-call or prose follows the marker. The legacy `ADAPTIVE_RESULT_JSON:` marker
-remains read-compatible. This is a bounded trusted-relay recovery contract for a
-WSL transport failure; unmarked JSON found in terminal prose is never accepted
-as task evidence. An explicit Orca failure status or visible worker crash takes
-precedence over a success marker.
+marker encoding the same compact JSON bytes, with no later tool call or prose.
+The fallback representation is prepared before the lifecycle attempt; any
+encoding command runs before `worker_done`. Padding is optional and
+terminal-inserted whitespace inside the base64url payload is ignored. The legacy
+`ADAPTIVE_RESULT_JSON:` marker remains read-compatible. This is a bounded
+trusted-relay recovery contract for a WSL transport failure; unmarked JSON found
+in terminal prose is never accepted as task evidence. An explicit Orca failure
+status or visible worker crash takes precedence over a success marker.
 Each plan phase is a logical Gate with its own attempt history. Every attempt
 records its parent, phase, model, effort, rank, authority, classification,
 decision, material retry delta, file changes, workspace/target fingerprints,
