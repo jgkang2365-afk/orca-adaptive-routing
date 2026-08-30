@@ -253,6 +253,70 @@ class RunnerContractTests(unittest.TestCase):
         self.assertEqual(adapter.failed[0][0], "task_1")
         self.assertIn("ORCHESTRATION_FAILURE", adapter.failed[0][1])
 
+    def test_persistent_agent_unconfigured_is_terminal_without_capability_escalation(self):
+        adapter = FakeAdapter(Path("/home/user/project"))
+        start_calls = 0
+
+        def fail_start(*args, **kwargs):
+            nonlocal start_calls
+            from adaptive_coordinator.orca import CoordinatorError
+
+            start_calls += 1
+            raise CoordinatorError(
+                "terminal is not running a recognized agent",
+                code="agent_unconfigured",
+            )
+
+        adapter.start_worker = fail_start
+        result = ProductionRunner(adapter_factory=lambda _: adapter).run(
+            "Inspect project metadata.", "/home/user/project"
+        )
+
+        self.assertIs(result.final_status, PhaseStatus.FAILED)
+        self.assertEqual(start_calls, 1)
+        self.assertEqual(len(adapter.routes), 0)
+        self.assertEqual(len(adapter.failed), 1)
+        self.assertEqual(len(result.phase_list), 1)
+        attempt = result.logical_gates["investigation-1"].attempts[0]
+        self.assertEqual(attempt.model, "gpt-5.6-luna")
+        self.assertEqual(attempt.failure_class, "ORCHESTRATION_FAILURE")
+        self.assertEqual(attempt.decision, "TERMINAL")
+        self.assertFalse(any(
+            decision.get("decision") == "ESCALATE_CAPABILITY"
+            for decision in result.adaptive_decisions
+        ))
+
+    def test_unknown_structured_adapter_error_is_terminal_without_model_retry(self):
+        adapter = FakeAdapter(Path("/home/user/project"))
+        start_calls = 0
+
+        def fail_start(*args, **kwargs):
+            nonlocal start_calls
+            from adaptive_coordinator.orca import CoordinatorError
+
+            start_calls += 1
+            raise CoordinatorError("opaque command rejection", code="other_code")
+
+        adapter.start_worker = fail_start
+        result = ProductionRunner(adapter_factory=lambda _: adapter).run(
+            "Inspect project metadata.", "/home/user/project"
+        )
+
+        self.assertIs(result.final_status, PhaseStatus.FAILED)
+        self.assertEqual(start_calls, 1)
+        self.assertEqual(len(adapter.failed), 1)
+        self.assertEqual(len(result.phase_list), 1)
+        attempt = result.logical_gates["investigation-1"].attempts[0]
+        self.assertEqual(attempt.model, "gpt-5.6-luna")
+        self.assertEqual(attempt.failure_class, "ORCHESTRATION_FAILURE")
+        self.assertEqual(attempt.decision, "TERMINAL")
+        self.assertFalse(any(
+            decision.get("decision") in {
+                "RETRY_SAME_CAPABILITY", "ESCALATE_CAPABILITY"
+            }
+            for decision in result.adaptive_decisions
+        ))
+
     def test_active_dispatch_is_fenced_before_failure_update_and_release(self):
         class ActiveDispatchAdapter(FakeAdapter):
             def __init__(self, workspace):

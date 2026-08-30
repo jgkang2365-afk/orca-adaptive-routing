@@ -412,17 +412,24 @@ class SuccessEvidenceGate:
 
 class FailureClassifier:
     EXTERNAL = ("permission denied", "credential", "plan limitation", "quota", "service outage", "access denied")
-    ORCHESTRATION = ("selector_not_found", "worker placement", "placement failure", "placement rejected", "vsock",
+    ORCHESTRATION = ("agent_unconfigured", "terminal is not running a recognized agent",
+                     "selector_not_found", "worker placement", "placement failure", "placement rejected", "vsock",
                      "adapter error", "adapter failure", "terminal launch failure",
                      "orca runtime error", "orca lifecycle error")
     TRANSIENT = ("rate limit", "temporarily", "network timeout", "connection reset", "process interrupted")
     RECOVERABLE = ("syntax error", "syntaxerror", "assertion failed", "assertion failure",
                    "assertionerror", "type error", "typeerror", "lint failure")
+    ORCHESTRATION_ERROR_CODES = {
+        "agent_unconfigured",
+        "selector_not_found",
+        "worker_placement_failure",
+    }
 
     @classmethod
     def classify(cls, route: Route, completion: Mapping[str, Any], result: NormalizedWorkerResult,
                  evidence_reason: str, target_mismatch: str | None = None) -> FailureClassification:
         mode = str(completion.get("mode", ""))
+        error_code = str(completion.get("error_code") or "").lower()
         text = " ".join(filter(None, (result.reason, result.summary, evidence_reason))).lower()
         if mode == "question" or result.needs_user_input:
             return FailureClassification(FailureClass.USER_ACTION_REQUIRED, "high", "question_event", (text[:500],))
@@ -443,10 +450,21 @@ class FailureClassifier:
             return FailureClassification(FailureClass.RECOVERABLE_IMPLEMENTATION_FAILURE, "high", "verified_target_defect", result.evidence)
         if result.verification_outcome in {VerificationOutcome.INCONCLUSIVE.value, VerificationOutcome.NOT_VERIFIED.value}:
             return FailureClassification(FailureClass.AMBIGUOUS_FAILURE, "high", "verification_inconclusive", result.evidence)
-        if any(marker in text for marker in cls.ORCHESTRATION):
+        if error_code in cls.ORCHESTRATION_ERROR_CODES or any(marker in text for marker in cls.ORCHESTRATION):
             return FailureClassification(FailureClass.ORCHESTRATION_FAILURE, "high", "runtime_error", (text[:500],))
         if any(marker in text for marker in cls.TRANSIENT):
             return FailureClassification(FailureClass.TRANSIENT_FAILURE, "high", "transient_signal", (text[:500],))
+        if mode == "adapter_error":
+            # An adapter/Orca command failure is infrastructure evidence, not
+            # proof that the assigned model lacked reasoning capability. Keep
+            # explicit external/transient mappings above, then fail closed for
+            # every unknown structured adapter error.
+            return FailureClassification(
+                FailureClass.ORCHESTRATION_FAILURE,
+                "high",
+                "adapter_error",
+                (text[:500],),
+            )
         if any(marker in text for marker in cls.RECOVERABLE):
             return FailureClassification(FailureClass.RECOVERABLE_IMPLEMENTATION_FAILURE, "high",
                                          "local_implementation_error", (text[:500],))
@@ -854,7 +872,12 @@ class ProductionRunner:
                 self._record_decision(result, attempt, decision)
             except CoordinatorError as exc:
                 error_result = NormalizedWorkerResult("FAILED", "", reason=str(exc))
-                failure = FailureClassifier.classify(route, {"mode": "adapter_error"}, error_result, str(exc))
+                failure = FailureClassifier.classify(
+                    route,
+                    {"mode": "adapter_error", "error_code": exc.code},
+                    error_result,
+                    str(exc),
+                )
                 material = self._material_delta(gate, failure, error_result)
                 if route.model == SOL and "unavailable" in str(exc).lower():
                     if route.effort == "xhigh":

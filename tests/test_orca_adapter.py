@@ -149,6 +149,75 @@ class OrcaAdapterTests(unittest.TestCase):
             worker_start,
         )
 
+    def test_agent_readiness_race_retries_same_terminal_then_starts_one_dispatch(self) -> None:
+        original = self.adapter.runner
+        starts = 0
+
+        def delayed_agent_registration(command):
+            nonlocal starts
+            if list(command)[1:3] == ["orchestration", "worker-start"]:
+                starts += 1
+                if starts == 1:
+                    raise CoordinatorError(
+                        "terminal is not running a recognized agent",
+                        code="agent_unconfigured",
+                    )
+            return original(command)
+
+        self.adapter.runner = delayed_agent_registration
+        with patch("adaptive_coordinator.orca.time.sleep") as sleep:
+            worker = self.adapter.start_worker(
+                "run_test", "task_test", route(Authority.READ_ONLY)
+            )
+
+        self.assertEqual(worker.dispatch_id, "ctx_test")
+        self.assertEqual(starts, 2)
+        self.assertEqual(sleep.call_count, 1)
+        creates = [command for command in self.runner.commands
+                   if command[1:3] == ["terminal", "create"]]
+        closes = [command for command in self.runner.commands
+                  if command[1:3] == ["terminal", "close"]]
+        successful_dispatches = [command for command in self.runner.commands
+                                 if command[1:3] == ["orchestration", "worker-start"]]
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(len(closes), 0)
+        self.assertEqual(len(successful_dispatches), 1)
+        self.assertTrue(all("term_test" in command for command in self.runner.commands
+                            if command[1:3] in (["terminal", "wait"],
+                                                ["orchestration", "worker-start"])))
+
+    def test_persistent_agent_unconfigured_closes_only_created_terminal(self) -> None:
+        original = self.adapter.runner
+        starts = 0
+
+        def never_registered(command):
+            nonlocal starts
+            if list(command)[1:3] == ["orchestration", "worker-start"]:
+                starts += 1
+                raise CoordinatorError(
+                    "terminal is not running a recognized agent",
+                    code="agent_unconfigured",
+                )
+            return original(command)
+
+        self.adapter.runner = never_registered
+        with patch("adaptive_coordinator.orca.time.sleep") as sleep:
+            with self.assertRaises(CoordinatorError) as raised:
+                self.adapter.start_worker(
+                    "run_test", "task_test", route(Authority.READ_ONLY)
+                )
+
+        self.assertEqual(raised.exception.code, "agent_unconfigured")
+        self.assertEqual(starts, len(self.adapter.WORKER_START_READINESS_DELAYS) + 1)
+        self.assertEqual(sleep.call_count, len(self.adapter.WORKER_START_READINESS_DELAYS))
+        creates = [command for command in self.runner.commands
+                   if command[1:3] == ["terminal", "create"]]
+        closes = [command for command in self.runner.commands
+                  if command[1:3] == ["terminal", "close"]]
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(len(closes), 1)
+        self.assertEqual(closes[0][closes[0].index("--terminal") + 1], "term_test")
+
     def test_critical_write_is_blocked_without_assessment(self) -> None:
         with self.assertRaises(SafetyGateError):
             self.adapter.start_worker(
