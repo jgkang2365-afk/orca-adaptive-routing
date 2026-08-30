@@ -8,6 +8,7 @@ from pathlib import Path
 from .orca import OrcaAdapter
 from .runner import PhaseStatus, ProductionRunner
 from .routing import Router
+from .worker_report import report_worker_result
 
 
 def parser() -> argparse.ArgumentParser:
@@ -24,6 +25,12 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("task")
     run.add_argument("--workspace", type=Path, default=Path.cwd())
     run.add_argument("--timeout-ms", type=int, default=300_000)
+    report = sub.add_parser("worker-report", help=argparse.SUPPRESS)
+    report.add_argument("--result-json", required=True)
+    report.add_argument("--from", dest="from_handle", required=True)
+    report.add_argument("--dispatch-capability", required=True)
+    report.add_argument("--task-id", required=True)
+    report.add_argument("--dispatch-id", required=True)
     return result
 
 
@@ -43,6 +50,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"package_version": version, "installed_commit": commit}, separators=(",", ":")))
         return 0
     args = parser().parse_args(argv)
+    if args.command == "worker-report":
+        return report_worker_result(
+            result_json=args.result_json,
+            from_handle=args.from_handle,
+            dispatch_capability=args.dispatch_capability,
+            task_id=args.task_id,
+            dispatch_id=args.dispatch_id,
+        )
     router = Router()
     plan = (
         router.reclassify(args.task, args.new_findings)

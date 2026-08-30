@@ -641,8 +641,9 @@ class OrcaAdapter:
         ) -> dict[str, Any]:
             kind = message.get("type") or message.get("message_type")
             if kind == "worker_done":
-                structured = result_contract_mapping(
-                    _bounded_json_mapping(message.get("body"))
+                structured = (
+                    result_contract_mapping(_bounded_json_mapping(message.get("payload")))
+                    or result_contract_mapping(_bounded_json_mapping(message.get("body")))
                 )
                 completion: dict[str, Any] = {
                     "mode": "worker_done", "message": message,
