@@ -666,13 +666,14 @@ class ProductionClosedLoopTests(unittest.TestCase):
                 "do not echo it as an output field",
                 "Serialize the complete object as compact UTF-8 JSON and keep it in memory",
                 "Do not create a temporary file or write anywhere",
-                "Your final tool call must invoke the installed `orca-adaptive worker-report` helper exactly once",
+                "Your last tool call must invoke the installed `orca-adaptive worker-report` helper exactly once",
                 "exact --from, --dispatch-capability, --task-id, and --dispatch-id values",
                 "Do not invoke `orca-ide orchestration send` yourself",
                 "attempts worker_done exactly once with the three-sentence summary and matching outcome",
-                "always prints exactly one final framed terminal marker",
+                "always prints exactly one framed marker",
                 "ADAPTIVE_RESULT_GZ64:<base64url gzip-compressed compact UTF-8 JSON, padding optional>",
-                "Make the marker the final command output",
+                "copy its complete marker exactly once as your entire final assistant response",
+                "Do not regenerate or alter the marker, add other prose, or call another tool",
             )
             positions = [spec.index(fragment) for fragment in ordered]
             self.assertEqual(positions, sorted(positions))
@@ -681,7 +682,7 @@ class ProductionClosedLoopTests(unittest.TestCase):
             self.assertIn("READ-ONLY workers cannot write to /tmp or the workspace", spec)
             self.assertIn("durable terminal evidence for the Coordinator", spec)
             self.assertIn("it is not a second lifecycle message", spec)
-            self.assertIn("after it, emit no prose and call no tool", spec)
+            self.assertIn("outside collapsed TUI tool output", spec)
             self.assertNotIn("Regardless of whether lifecycle delivery succeeds", spec)
 
     def test_repeated_inconclusive_retries_only_verification_gate(self):

@@ -86,10 +86,12 @@ that still cannot fit is reported as `INSUFFICIENT_SUCCESS_EVIDENCE`, never as
 a truncated success. The helper rejects result content containing its protected
 dispatch capability rather than persisting that secret in payload or terminal
 evidence. It validates the contract, attempts `worker_done` exactly once with
-the three-sentence summary as `--body`, then prints one final framed
+the three-sentence summary as `--body`, then prints one framed
 `ADAPTIVE_RESULT_GZ64:<base64url gzip-compressed compact UTF-8 JSON>:END_ADAPTIVE_RESULT`
 marker encoding the same compact JSON bytes regardless of the lifecycle CLI's
-exit status, with no later tool call or prose. The marker is durable terminal
+exit status. The worker copies that exact marker once as its entire final
+assistant response, with no regeneration, added prose, or later tool call. This
+keeps the marker visible when Codex TUI collapses tool output. The marker is durable terminal
 evidence, not a second lifecycle message: it covers both an explicit transport
 failure and a successful CLI response that never reaches the Orca inbox.
 Preparing it must not create a temporary file or write to the workspace, so the
