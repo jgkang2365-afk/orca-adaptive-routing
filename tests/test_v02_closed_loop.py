@@ -614,21 +614,23 @@ class ProductionClosedLoopTests(unittest.TestCase):
                 "Construct one complete result object first",
                 "The summary string itself must be exactly three sentences",
                 "Serialize the complete object as compact UTF-8 JSON and keep it in memory",
-                "Before attempting lifecycle delivery, prepare the base64url fallback representation",
+                "Before lifecycle delivery, prepare the base64url representation",
                 "Do not create a temporary file or write anywhere",
-                "Attempt worker_done exactly once with --body equal to that compact JSON object",
-                "If worker_done succeeds, stop immediately",
-                "If and only if worker_done fails to deliver",
+                "Keep the exact three-sentence summary in a separate variable",
+                "Your final tool call must be one shell compound command",
+                "attempt worker_done exactly once with --body equal to the three-sentence summary",
+                "regardless of its exit status print exactly one final visible framed marker",
                 "ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON, padding optional>",
-                "After the fallback marker, emit no prose and call no tool",
+                "Make the marker the final command output",
             )
             positions = [spec.index(fragment) for fragment in ordered]
             self.assertEqual(positions, sorted(positions))
             self.assertIn("Never call worker_done twice", spec)
             self.assertIn("encoding the same compact JSON object", spec)
             self.assertIn("READ-ONLY workers cannot write to /tmp or the workspace", spec)
-            self.assertIn("populate another shell variable before worker_done", spec)
-            self.assertIn("do not print a marker, emit prose, or call another tool", spec)
+            self.assertIn("durable terminal evidence for the Coordinator", spec)
+            self.assertIn("it is not a second lifecycle message", spec)
+            self.assertIn("after it, emit no prose and call no tool", spec)
             self.assertNotIn("Regardless of whether lifecycle delivery succeeds", spec)
 
     def test_repeated_inconclusive_retries_only_verification_gate(self):
