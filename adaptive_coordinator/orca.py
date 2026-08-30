@@ -309,6 +309,8 @@ class OrcaAdapter:
                 return {"mode": "worker_done", "message": message, "delivery": delivery}
             if kind == "escalation" and dispatch_id == worker.dispatch_id:
                 return {"mode": "escalation", "message": message, "delivery": delivery}
+            if kind == "question" and dispatch_id == worker.dispatch_id:
+                return {"mode": "question", "message": message, "delivery": delivery}
         return {"mode": "timeout", "delivery": delivery}
 
     def trusted_relay(

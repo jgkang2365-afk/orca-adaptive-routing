@@ -1,0 +1,19 @@
+{
+  "_provenance": {
+    "actual_sanitized_captures": ["actual_worker_show", "actual_dispatch_not_found"],
+    "capture_command": "orca-ide orchestration worker-show --dispatch <redacted> --json",
+    "deterministic_synthetic_edge_cases": ["worker_done", "escalation", "question", "timeout_valid_evidence", "timeout_no_evidence", "permission_denied", "plan_limitation", "worker_placement_failure", "cleanup_failure"],
+    "note": "Synthetic cases exercise parser state transitions; they are not represented as production captures."
+  },
+  "actual_worker_show": {"ok": true, "result": {"dispatch": {"status": "completed"}, "worker": {"state": "succeeded", "stage": "settled", "residualResources": []}, "terminal": null, "terminalResource": {"releaseState": "released"}}},
+  "actual_dispatch_not_found": {"ok": false, "error": {"code": "dispatch_not_found"}},
+  "worker_done": {"messages": [{"type": "worker_done", "dispatchId": "dispatch_fixture", "status": "completed"}]},
+  "escalation": {"messages": [{"type": "escalation", "dispatchId": "dispatch_fixture", "body": "reasoning confidence insufficient"}]},
+  "question": {"messages": [{"type": "question", "dispatchId": "dispatch_fixture", "body": "User approval is required"}]},
+  "timeout_valid_evidence": {"mode": "timeout", "result": {"status": "completed", "summary": "inspection finished", "conclusion": "bounded", "evidence": ["file:a"], "files_checked": ["a"], "unresolved_questions": []}},
+  "timeout_no_evidence": {"mode": "timeout", "result": {}},
+  "permission_denied": {"status": "failed", "reason": "permission denied by account policy"},
+  "plan_limitation": {"status": "blocked", "external_blocker": "account plan limitation"},
+  "worker_placement_failure": {"status": "failed", "reason": "worker placement selector_not_found"},
+  "cleanup_failure": {"state": "release_failed", "error": "terminal still active"}
+}

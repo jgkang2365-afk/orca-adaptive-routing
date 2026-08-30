@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from .routing import Router
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="orca-adaptive")
+    result.add_argument("--version", action="store_true", help="show package version and installed commit")
     sub = result.add_subparsers(dest="command", required=True)
     route = sub.add_parser("route", help="classify a task without launching a worker")
     route.add_argument("task")
@@ -26,6 +28,20 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # argparse required subcommands and a global --version do not compose, so
+    # handle the metadata-only path before parsing commands.
+    if argv is None:
+        import sys
+        argv = sys.argv[1:]
+    if argv == ["--version"]:
+        try:
+            version = importlib.metadata.version("orca-adaptive-routing")
+        except importlib.metadata.PackageNotFoundError:
+            version = "0.2.0"
+        marker = Path(__file__).resolve().parent.parent / "INSTALL_COMMIT"
+        commit = marker.read_text().strip() if marker.is_file() else "source-tree"
+        print(json.dumps({"package_version": version, "installed_commit": commit}, separators=(",", ":")))
+        return 0
     args = parser().parse_args(argv)
     router = Router()
     plan = (
