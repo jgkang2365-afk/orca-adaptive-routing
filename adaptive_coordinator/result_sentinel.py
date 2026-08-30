@@ -9,6 +9,7 @@ from typing import Any, Iterator, Mapping, Sequence
 
 
 RESULT_LIMIT = 65_536
+GZ64_ENCODED_LIMIT = 512
 B64_MARKER = "ADAPTIVE_RESULT_B64:"
 GZ64_MARKER = "ADAPTIVE_RESULT_GZ64:"
 B64_END_MARKER = ":END_ADAPTIVE_RESULT"
@@ -149,7 +150,7 @@ def _decode_gz64_result(
     if end < 0:
         return None, f"final {label} marker is malformed or truncated"
     encoded = re.sub(r"\s+", "", text[start:end])
-    if not encoded or len(encoded.encode("ascii", errors="replace")) > limit:
+    if not encoded or len(encoded.encode("ascii", errors="replace")) > GZ64_ENCODED_LIMIT:
         return None, f"final {label} marker is malformed or truncated"
     if not re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", encoded):
         return None, f"final {label} marker is malformed or truncated"
