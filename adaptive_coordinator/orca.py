@@ -370,7 +370,11 @@ class OrcaAdapter:
                     self._wait_for_tui_idle(
                         terminal_handle,
                         10000,
-                        allow_update_skip=False,
+                        # A newly started Codex TUI can surface the same
+                        # version prompt again while Orca's agent registry is
+                        # catching up. Keep the bounded readiness retry on the
+                        # same terminal and select only the exact Skip action.
+                        allow_update_skip=True,
                     )
         except Exception as start_error:
             try:

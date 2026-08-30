@@ -364,6 +364,46 @@ class OrcaAdapterTests(unittest.TestCase):
                             if command[1:3] in (["terminal", "wait"],
                                                 ["orchestration", "worker-start"])))
 
+    def test_agent_readiness_retry_skips_reappearing_exact_update_prompt(self) -> None:
+        original = self.adapter.runner
+        starts = 0
+        waits = [
+            {"wait": {"condition": "tui-idle", "satisfied": True,
+                      "status": "running", "blockedReason": None}},
+            {"wait": {"condition": "tui-idle", "satisfied": False,
+                      "status": "running", "blockedReason": "codex-update-prompt"}},
+            {"wait": {"condition": "tui-idle", "satisfied": True,
+                      "status": "running", "blockedReason": None}},
+        ]
+
+        def registration_prompt(command):
+            nonlocal starts
+            command = list(command)
+            if command[1:3] == ["terminal", "wait"]:
+                self.runner.commands.append(command)
+                return waits.pop(0)
+            if command[1:3] == ["terminal", "send"]:
+                self.runner.commands.append(command)
+                return {"sent": True}
+            if command[1:3] == ["orchestration", "worker-start"]:
+                starts += 1
+                if starts == 1:
+                    raise CoordinatorError("agent is not registered", code="agent_unconfigured")
+            return original(command)
+
+        self.adapter.runner = registration_prompt
+        with patch("adaptive_coordinator.orca.time.sleep"):
+            worker = self.adapter.start_worker(
+                "run_test", "task_test", route(Authority.READ_ONLY)
+            )
+
+        self.assertEqual(worker.dispatch_id, "ctx_test")
+        self.assertEqual(starts, 2)
+        sends = [command for command in self.runner.commands
+                 if command[1:3] == ["terminal", "send"]]
+        self.assertEqual(len(sends), 1)
+        self.assertEqual(sends[0][sends[0].index("--text") + 1], "2")
+
     def test_persistent_agent_unconfigured_closes_only_created_terminal(self) -> None:
         original = self.adapter.runner
         starts = 0
