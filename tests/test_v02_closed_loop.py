@@ -16,7 +16,10 @@ from adaptive_coordinator.routing import (
     CAPABILITY_LADDER, LUNA, SOL, TERRA, Router, capability_at, capability_rank,
     next_capability,
 )
-from adaptive_coordinator.result_sentinel import final_marked_structured_result
+from adaptive_coordinator.result_sentinel import (
+    GZ64_ENCODED_LIMIT,
+    final_marked_structured_result,
+)
 from adaptive_coordinator.runner import (
     DecisionEngine, FailureClassification, FailureClassifier, NormalizedWorkerResult,
     PhaseStatus, ProductionRunner, ResultNormalizer, SuccessEvidenceGate,
@@ -395,7 +398,7 @@ class OrcaGoldenPayloadTests(unittest.TestCase):
         decoded, error = final_marked_structured_result(payload)
         self.assertIsNone(error)
         self.assertEqual(decoded, result)
-        self.assertLessEqual(len(encoded), 512)
+        self.assertLessEqual(len(encoded), GZ64_ENCODED_LIMIT)
         self.assertLess(len(encoded), len(base64.urlsafe_b64encode(json.dumps(result).encode())))
 
         compressor = zlib.compressobj(wbits=31)
@@ -410,14 +413,14 @@ class OrcaGoldenPayloadTests(unittest.TestCase):
         noisy = {
             "status": "completed", "summary": "too large",
             "conclusion": "done", "evidence": [
-                hashlib.sha256(str(index).encode()).hexdigest() for index in range(40)
+                hashlib.sha256(str(index).encode()).hexdigest() for index in range(200)
             ],
             "files_checked": ["AGENTS.md"], "unresolved_questions": [],
         }
         compressor = zlib.compressobj(wbits=31)
         compressed_noisy = compressor.compress(json.dumps(noisy, separators=(",", ":")).encode()) + compressor.flush()
         encoded_noisy = base64.urlsafe_b64encode(compressed_noisy).decode().rstrip("=")
-        self.assertGreater(len(encoded_noisy), 512)
+        self.assertGreater(len(encoded_noisy), GZ64_ENCODED_LIMIT)
         decoded, error = final_marked_structured_result({"terminal": {"tail": [
             "ADAPTIVE_RESULT_GZ64:" + encoded_noisy + ":END_ADAPTIVE_RESULT"
         ]}})

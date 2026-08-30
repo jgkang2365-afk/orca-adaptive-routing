@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import base64
 import gzip
+import hashlib
 import json
 import subprocess
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 
-from adaptive_coordinator.result_sentinel import final_marked_structured_result
+from adaptive_coordinator.result_sentinel import (
+    GZ64_ENCODED_LIMIT,
+    final_marked_structured_result,
+)
 from adaptive_coordinator.worker_report import report_worker_result
 
 
@@ -95,7 +99,26 @@ class WorkerReportTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(decoded, expected)
 
-    def test_oversized_or_invalid_success_fails_closed(self):
+    def test_ordinary_multifile_result_larger_than_legacy_cap_succeeds(self):
+        commands = []
+
+        def runner(command, **kwargs):
+            commands.append(command)
+            return subprocess.CompletedProcess(command, 1, "", "transport failed")
+
+        ordinary = investigation_result(evidence=[
+            base64.urlsafe_b64encode(bytes(range(256))).decode() + str(index)
+            for index in range(10)
+        ])
+        _, marker, decoded, error = self.invoke(ordinary, runner)
+        self.assertIsNone(error)
+        self.assertEqual(decoded, ordinary)
+        self.assertEqual(commands[0][commands[0].index("--outcome") + 1], "succeeded")
+        encoded = marker.removeprefix("ADAPTIVE_RESULT_GZ64:").removesuffix(":END_ADAPTIVE_RESULT")
+        self.assertGreater(len(encoded), 512)
+        self.assertLessEqual(len(encoded), GZ64_ENCODED_LIMIT)
+
+    def test_result_over_encoded_limit_fails_closed(self):
         commands = []
 
         def runner(command, **kwargs):
@@ -103,8 +126,8 @@ class WorkerReportTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 1, "", "transport failed")
 
         noisy = investigation_result(evidence=[
-            base64.urlsafe_b64encode(bytes(range(256))).decode() + str(index)
-            for index in range(20)
+            hashlib.sha256(str(index).encode()).hexdigest()
+            for index in range(300)
         ])
         _, marker, decoded, error = self.invoke(noisy, runner)
         self.assertIsNone(error)
@@ -112,7 +135,7 @@ class WorkerReportTests(unittest.TestCase):
         self.assertEqual(decoded["failure_class_hint"], "INSUFFICIENT_SUCCESS_EVIDENCE")
         self.assertEqual(commands[0][commands[0].index("--outcome") + 1], "failed")
         encoded = marker.removeprefix("ADAPTIVE_RESULT_GZ64:").removesuffix(":END_ADAPTIVE_RESULT")
-        self.assertLessEqual(len(encoded), 512)
+        self.assertLessEqual(len(encoded), GZ64_ENCODED_LIMIT)
 
     def test_highly_compressible_result_over_decoded_limit_fails_closed(self):
         commands = []
