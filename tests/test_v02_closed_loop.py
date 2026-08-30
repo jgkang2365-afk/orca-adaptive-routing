@@ -235,7 +235,10 @@ class EvidenceContractTests(unittest.TestCase):
                 "unexecuted_verification": [], "workspace_diff": []}
         accepted = (
             ["PASS"], ["0 failed, 1 passed"], ["status: passed"],
-            {"status": "passed"}, ["all tests passed"],
+            {"status": "passed"}, ["all tests passed"], ["3 passed in 0.12s"],
+            ["1 passed, 2 warnings in 0.12s"], ["Tests: 3 passed, 3 total"],
+            ["3 passed (3)"],
+            ["content_exact: passed (12 bytes)", "workspace_diff_empty: passed"],
         )
         for test_results in accepted:
             with self.subTest(accepted=test_results):
@@ -245,6 +248,14 @@ class EvidenceContractTests(unittest.TestCase):
             [], ["ERROR during collection"], ["worker crash"], ["NOT RUN"],
             ["SKIPPED"], ["2 skipped"], ["1 failed, 3 passed"], ["FAILED"],
             ["0 failed, 0 passed"],
+            ["unit: passed", "integration: skipped"],
+            ["unit: passed, integration pending"], ["unit: passed?"],
+            ["unit: passed but result is inconclusive"], ["prefix garbage: ok maybe"],
+            ["status: passed but integration pending"], ["result=ok?"],
+            ["outcome: success, but inconclusive"],
+            ["all tests passed except integration pending"],
+            ["1 passed; integration pending"],
+            ["Tests: 3 passed, 4 total"], ["3 passed (4)"],
         )
         for test_results in rejected:
             with self.subTest(rejected=test_results):

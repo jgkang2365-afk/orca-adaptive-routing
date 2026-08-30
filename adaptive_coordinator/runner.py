@@ -271,18 +271,43 @@ class SuccessEvidenceGate:
         if any(marker in text for marker in ("error", "crash", "not run", "not-run",
                                              "not executed", "execution skipped")):
             return False
+        if re.search(r"\b(?:skip|skipped)\b", text):
+            return False
         if re.search(r"\b[1-9][0-9]*\s+failed\b", text):
             return False
         without_zero_failures = re.sub(r"\b0\s+failed\b", "", text)
         if re.search(r"\b(fail|failed|failure)\b", without_zero_failures):
             return False
-        explicit_pass = bool(
-            re.search(r"\b[1-9][0-9]*\s+passed\b", text)
-            or re.search(r"\b(status|result|outcome)\s*[:=]\s*(pass|passed|ok|success)\b", text)
-            or re.search(r"\ball\s+(?:tests?\s+)?passed\b", text)
-            or text in {"pass", "passed", "ok", "success"}
+        items = tuple(item.strip().lower() for item in test_results)
+        total_match = (re.fullmatch(
+            r"tests:\s*([1-9][0-9]*)\s+passed,\s*([1-9][0-9]*)\s+total",
+            items[0],
+        ) if len(items) == 1 else None)
+        parenthesized_match = (re.fullmatch(
+            r"([1-9][0-9]*)\s+passed\s+\(([1-9][0-9]*)\)",
+            items[0],
+        ) if len(items) == 1 else None)
+        scalar_pass = len(items) == 1 and bool(
+            re.fullmatch(
+                r"(?:0\s+failed,\s*)?[1-9][0-9]*\s+passed"
+                r"(?:,\s*\d+\s+warnings?)?(?:\s+in\s+\d+(?:\.\d+)?s)?",
+                items[0],
+            )
+            or (total_match and total_match.group(1) == total_match.group(2))
+            or (parenthesized_match and parenthesized_match.group(1) == parenthesized_match.group(2))
+            or re.fullmatch(r"(?:status|result|outcome)\s*[:=]\s*(?:pass|passed|ok|success)", items[0])
+            or re.fullmatch(r"all\s+(?:tests?\s+)?passed", items[0])
+            or items[0] in {"pass", "passed", "ok", "success"}
         )
-        return explicit_pass
+        named_passes = all(
+            re.fullmatch(
+                r"[^:;\r\n]{1,160}:\s*(?:pass|passed|ok|success)"
+                r"(?:\s*\([^()\r\n]{1,500}\))?",
+                item,
+            )
+            for item in items
+        )
+        return scalar_pass or named_passes
 
     @staticmethod
     def evaluate(route: Route, result: NormalizedWorkerResult, actual_changes: Sequence[str]) -> tuple[bool, str]:
