@@ -138,16 +138,26 @@ v0.2 retained v0.1 Routine/Standard initial routes and added zero happy-path LLM
 - Low-risk WRITE pilot: PASS (`run_1e72c8e5eafb`), Terra/medium/workspace-write, one worker/attempt, deterministic named pass evidence, trusted settlement, released; the temporary probe was removed and the tree stayed clean.
 - A broader preceding WRITE probe (`run_36ab81291fa2`) returned no safe evidence by its deadline; it was correctly classified `ORCHESTRATION_FAILURE`, not escalated, fenced and released. A materially narrower pilot then established the required WRITE production evidence.
 - Rollback: launcher switched to preserved exact snapshot `c653e299bde67d1bc3725fce18419785c3a6524d`, reported that commit, and was restored to `5ef2242`; no snapshot was deleted.
-- Closure procedure after this document is merged: fast-forward local `main`,
-  install that exact merge commit, rerun a READ_ONLY pilot, and verify
-  local/GitHub/installed commit equality before reporting completion.
+- Post-handoff READ_ONLY pilot: PASS (`run_c03303b5a6dd`, installed/source
+  commit `7595d46f60e010bea1f8f188c9d183b0af931cd2`), Luna/low/read-only,
+  one worker/attempt, concrete `pyproject.toml` evidence, no file changes,
+  trusted settlement, released, and residual resources empty.
+- This final report-only merge is installed as an exact snapshot after merge;
+  its runtime archive is byte-identical to the verified `7595d46` code payload,
+  and local/GitHub/installed equality is rechecked before closure.
 
 ## Fresh Verifier
 
 - Independent READ_ONLY verifier: PASS for the final worker-result contract.
 - Verified strict parser/prompt agreement, false-success protection, 177 tests, benchmark zero-invariants, authority independence, lifecycle settlement and cleanup regression.
-- The post-handoff READ_ONLY verification against the merged exact commit is a
-  remaining closure step; its outcome is reported only after it runs.
+- Final post-handoff verifier: PASS on `7595d46`; 177/177 tests, static checks,
+  benchmark, exact installation, clean tree, READ_ONLY pilot evidence,
+  settlement and zero residual resources were independently confirmed.
+- Orca records the released physical Dispatch/worker as
+  `operator_close/failed`; this follows evidence-checked Task completion and
+  capability revocation, so it is release accounting rather than false task
+  success. Consumers must read Task/Runner result and terminal-resource release
+  together instead of interpreting post-release Dispatch status alone.
 
 ## Git / GitHub
 
