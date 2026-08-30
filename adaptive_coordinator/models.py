@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 
 
@@ -14,6 +14,51 @@ class Phase(StrEnum):
     IMPLEMENTATION = "implementation"
     ASSESSMENT = "assessment"
     VERIFICATION = "verification"
+
+
+class FailureClass(StrEnum):
+    INSUFFICIENT_SUCCESS_EVIDENCE = "INSUFFICIENT_SUCCESS_EVIDENCE"
+    EVIDENCE_GAP = "EVIDENCE_GAP"
+    STALE_EVIDENCE = "STALE_EVIDENCE"
+    ENVIRONMENT_MISMATCH = "ENVIRONMENT_MISMATCH"
+    TARGET_IDENTITY_MISMATCH = "TARGET_IDENTITY_MISMATCH"
+    TRANSIENT_FAILURE = "TRANSIENT_FAILURE"
+    RECOVERABLE_IMPLEMENTATION_FAILURE = "RECOVERABLE_IMPLEMENTATION_FAILURE"
+    CAPABILITY_FAILURE = "CAPABILITY_FAILURE"
+    AMBIGUOUS_FAILURE = "AMBIGUOUS_FAILURE"
+    DECOMPOSITION_FAILURE = "DECOMPOSITION_FAILURE"
+    MISSING_CONTEXT = "MISSING_CONTEXT"
+    EXTERNAL_BLOCKER = "EXTERNAL_BLOCKER"
+    USER_ACTION_REQUIRED = "USER_ACTION_REQUIRED"
+    ORCHESTRATION_FAILURE = "ORCHESTRATION_FAILURE"
+    TERMINAL_FAILURE = "TERMINAL_FAILURE"
+
+
+class AdaptiveDecision(StrEnum):
+    SUCCESS = "SUCCESS"
+    RESULT_REPAIR = "RESULT_REPAIR"
+    COLLECT_EVIDENCE = "COLLECT_EVIDENCE"
+    RETRY_SAME_CAPABILITY = "RETRY_SAME_CAPABILITY"
+    INSERT_READ_ONLY_DIAGNOSIS = "INSERT_READ_ONLY_DIAGNOSIS"
+    REPLAN = "REPLAN"
+    ESCALATE_CAPABILITY = "ESCALATE_CAPABILITY"
+    APPLY_RISK_FLOOR = "APPLY_RISK_FLOOR"
+    REOPEN_IMPLEMENTATION = "REOPEN_IMPLEMENTATION"
+    BLOCKED = "BLOCKED"
+    TERMINAL = "TERMINAL"
+
+
+class VerificationOutcome(StrEnum):
+    VERIFIED = "VERIFIED"
+    NOT_VERIFIED = "NOT_VERIFIED"
+    INCONCLUSIVE = "INCONCLUSIVE"
+    TARGET_FAILED = "TARGET_FAILED"
+
+
+class VerificationMode(StrEnum):
+    DETERMINISTIC_ONLY = "DETERMINISTIC_ONLY"
+    MODEL_REVIEW = "MODEL_REVIEW"
+    HYBRID = "HYBRID"
 
 
 @dataclass(frozen=True)
@@ -52,3 +97,99 @@ class RoutingPlan:
             "escalation_triggers": list(self.escalation_triggers),
             "routes": [route.to_dict() for route in self.routes],
         }
+
+
+@dataclass(frozen=True)
+class TaskBrief:
+    objective: str
+    requested_actions: tuple[str, ...]
+    forbidden_scope: tuple[str, ...]
+    read_only_constraint: bool
+    positive_risk_signals: tuple[str, ...]
+    language: str
+
+
+@dataclass
+class AttemptMetadata:
+    logical_gate_id: str
+    attempt_id: str
+    attempt_no: int
+    parent_attempt_id: str | None
+    phase: str
+    model: str
+    effort: str
+    capability_rank: int
+    authority: str
+    failure_class: str | None = None
+    classification_confidence: str | None = None
+    decision: str | None = None
+    decision_reason: str | None = None
+    retry_delta: str | None = None
+    material_new_evidence: bool = False
+    workspace_fingerprint: dict[str, object] = field(default_factory=dict)
+    target_fingerprint: dict[str, object] = field(default_factory=dict)
+    phase_spec_size: int = 0
+    evidence_packet_size: int = 0
+    verification_mode: str | None = None
+    blocker_kind: str | None = None
+    terminal_reason: str | None = None
+    files_changed: tuple[str, ...] = ()
+    attempted_actions: tuple[str, ...] = ()
+    unresolved_questions: tuple[str, ...] = ()
+    test_results: tuple[str, ...] = ()
+    relevant_evidence_refs: tuple[str, ...] = ()
+    elapsed_time: float = 0.0
+    prior_gate_invalidated: bool = False
+    invalidated_gate_id: str | None = None
+    invalidation_reason: str | None = None
+    invalidation_evidence: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass
+class LogicalGateState:
+    logical_gate_id: str
+    phase: str
+    authority: str
+    attempts: list[AttemptMetadata] = field(default_factory=list)
+    status: str = "PENDING"
+    same_level_retries: dict[int, int] = field(default_factory=dict)
+    no_progress_count: int = 0
+    active_mutation_attempt: str | None = None
+    baseline_changes: dict[str, str] = field(default_factory=dict, repr=False)
+    parent_gate_id: str | None = None
+    evidence_source_gate_id: str | None = None
+    verified_facts: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "logical_gate_id": self.logical_gate_id,
+            "phase": self.phase,
+            "authority": self.authority,
+            "status": self.status,
+            "parent_gate_id": self.parent_gate_id,
+            "evidence_source_gate_id": self.evidence_source_gate_id,
+            "verified_facts": list(self.verified_facts),
+            "attempts": [attempt.to_dict() for attempt in self.attempts],
+        }
+
+
+@dataclass(frozen=True)
+class EvidencePacket:
+    logical_gate_id: str
+    previous_attempts_summary: tuple[str, ...] = ()
+    verified_facts: tuple[str, ...] = ()
+    attempted_actions: tuple[str, ...] = ()
+    failure_class: str | None = None
+    failure_reason: str | None = None
+    unresolved_questions: tuple[str, ...] = ()
+    files_changed: tuple[str, ...] = ()
+    test_results: tuple[str, ...] = ()
+    target_fingerprint: tuple[tuple[str, str], ...] = ()
+    relevant_evidence_refs: tuple[str, ...] = ()
+    escalation_reason: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)

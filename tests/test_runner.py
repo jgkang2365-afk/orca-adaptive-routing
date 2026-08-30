@@ -65,7 +65,19 @@ class FakeAdapter:
         failure = self.failures.get(worker.route.phase.value)
         if failure:
             return {"status": "failed", "reason": failure}
-        return {"status": "completed", "summary": f"{worker.route.phase.value} complete"}
+        common = {"status": "completed", "summary": f"{worker.route.phase.value} complete"}
+        if worker.route.phase is Phase.INVESTIGATION:
+            return {**common, "conclusion": "scope inspected", "evidence": ["AGENTS.md"],
+                    "files_checked": ["AGENTS.md"], "unresolved_questions": []}
+        if worker.route.phase is Phase.ASSESSMENT:
+            return {**common, "risks": ["reviewed"], "impact": "bounded", "rollback": "available",
+                    "write_ready": True, "unresolved_questions": []}
+        if worker.route.phase is Phase.IMPLEMENTATION:
+            return {**common, "files_modified": [], "requirements_completed": ["implemented"],
+                    "tests_run": ["unit"], "test_results": ["PASS"],
+                    "unexecuted_verification": [], "workspace_diff": []}
+        return {**common, "verification_outcome": "VERIFIED", "evidence": ["tests PASS"],
+                "unresolved_questions": []}
 
     def trusted_relay(self, run_id, worker, summary, files_modified):
         self.relayed.append((worker.route.phase, tuple(files_modified)))
@@ -102,16 +114,13 @@ class RunnerContractTests(unittest.TestCase):
         self.assertEqual([r.phase for r in adapter.routes], [Phase.IMPLEMENTATION])
         self.assertIs(adapter.routes[0].authority, Authority.WORKSPACE_WRITE)
 
-    def test_c_complex_write_adds_conditional_verifier(self):
+    def test_c_complex_write_uses_deterministic_only_when_evidence_is_sufficient(self):
         result, adapter = self.run_task("Fix async external API retry timeout state sync.")
         self.assertIs(result.final_status, PhaseStatus.SUCCESS)
         self.assertEqual(
             [r.phase for r in adapter.routes],
-            [Phase.INVESTIGATION, Phase.IMPLEMENTATION, Phase.VERIFICATION],
+            [Phase.INVESTIGATION, Phase.IMPLEMENTATION],
         )
-        self.assertEqual(adapter.routes[-1].model, SOL)
-        self.assertEqual(adapter.routes[-1].effort, "medium")
-        self.assertIs(adapter.routes[-1].authority, Authority.READ_ONLY)
 
     def test_d_critical_write_order_and_gate(self):
         result, adapter = self.run_task("Implement a reversible database migration.")
@@ -136,7 +145,7 @@ class RunnerContractTests(unittest.TestCase):
             failures={"assessment": "rollback plan missing"},
         )
         self.assertIs(result.final_status, PhaseStatus.FAILED)
-        self.assertEqual([r.phase for r in adapter.routes], [Phase.ASSESSMENT])
+        self.assertNotIn(Phase.IMPLEMENTATION, [r.phase for r in adapter.routes])
 
     def test_g_escalation_is_reclassified_by_coordinator(self):
         result, adapter = self.run_task(
@@ -146,10 +155,10 @@ class RunnerContractTests(unittest.TestCase):
         self.assertIs(result.final_status, PhaseStatus.SUCCESS)
         self.assertIs(result.phase_list[0].status, PhaseStatus.ESCALATION_REQUESTED)
         self.assertEqual(adapter.routes[1].model, SOL)
-        self.assertIs(adapter.routes[1].phase, Phase.ASSESSMENT)
+        self.assertIs(adapter.routes[1].phase, Phase.INVESTIGATION)
         self.assertEqual(len(adapter.settled_escalations), 1)
 
-    def test_escalated_active_plan_controls_conditional_verifier(self):
+    def test_escalated_gate_does_not_replay_completed_plan(self):
         adapter = FakeAdapter(Path("/home/user/project"), modes=["escalation"])
 
         def completion(run_id, worker, timeout_ms):
@@ -166,17 +175,8 @@ class RunnerContractTests(unittest.TestCase):
             "Implement a small display fix.", "/home/user/project"
         )
         self.assertIs(result.final_status, PhaseStatus.SUCCESS)
-        self.assertEqual(result.classification, "complex")
-        self.assertEqual(result.routing_plan["level"], "complex")
-        self.assertEqual(
-            [route.phase for route in adapter.routes],
-            [
-                Phase.IMPLEMENTATION,
-                Phase.INVESTIGATION,
-                Phase.IMPLEMENTATION,
-                Phase.VERIFICATION,
-            ],
-        )
+        self.assertEqual([route.phase for route in adapter.routes],
+                         [Phase.IMPLEMENTATION, Phase.INVESTIGATION, Phase.IMPLEMENTATION])
 
     def test_h_verifier_failure_propagates(self):
         result, _ = self.run_task(
@@ -229,7 +229,9 @@ class RunnerContractTests(unittest.TestCase):
             "Inspect project metadata.", "/home/user/project"
         )
         self.assertIs(result.final_status, PhaseStatus.FAILED)
-        self.assertEqual(adapter.failed, [("task_1", "placement rejected")])
+        self.assertEqual(len(adapter.failed), 1)
+        self.assertEqual(adapter.failed[0][0], "task_1")
+        self.assertIn("ORCHESTRATION_FAILURE", adapter.failed[0][1])
 
     def test_worker_summary_is_bounded_and_does_not_dump_full_transcript(self):
         payload = {
@@ -242,7 +244,7 @@ class RunnerContractTests(unittest.TestCase):
         self.assertLessEqual(len(summary), 1_000)
         self.assertNotIn("unrelated", summary)
 
-    def test_conditional_verifier_exception_returns_machine_status(self):
+    def test_conditional_verifier_is_not_forced_for_deterministic_evidence(self):
         adapter = FakeAdapter(Path("/home/user/project"))
         original_start = adapter.start_worker
 
@@ -255,9 +257,8 @@ class RunnerContractTests(unittest.TestCase):
         result = ProductionRunner(adapter_factory=lambda _: adapter).run(
             "Fix async external API retry timeout state sync.", "/home/user/project"
         )
-        self.assertIs(result.final_status, PhaseStatus.BLOCKED)
-        self.assertIs(result.phase_list[-1].status, PhaseStatus.BLOCKED)
-        self.assertEqual(result.phase_list[-1].error, "verifier launch unavailable")
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertNotIn(Phase.VERIFICATION, [route.phase for route in adapter.routes])
 
     def test_route_authority_never_derives_from_model(self):
         result, adapter = self.run_task("Review an authorization rule without changing it.")

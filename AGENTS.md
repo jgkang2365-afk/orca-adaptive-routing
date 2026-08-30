@@ -70,7 +70,9 @@ Escalate a task only when one or more of the following occurs:
 Prefer increasing reasoning effort before increasing model class when appropriate.
 
 The normal ladder is Luna / low, Terra / medium, Terra / high, Sol / medium,
-then Sol / high.
+Sol / high, then Sol / xhigh. Sol / xhigh is an automatic ceiling used only
+after an unresolved Sol / high logical Gate with a concrete reasoning need;
+Sol / max is not an automatic fallback.
 
 Workers must not autonomously spawn higher-tier workers.
 They report an escalation condition to the Coordinator.
@@ -141,6 +143,21 @@ Fresh verification is recommended for:
 
 Fresh Verifier is READ-ONLY unless a separate implementation task is
 explicitly dispatched.
+
+## Closed-Loop Invariants
+
+`worker_done` settles lifecycle; it does not prove task success. The
+Coordinator must validate phase-specific evidence before accepting SUCCESS.
+Evidence gaps, stale or mismatched targets, external blockers, questions, and
+orchestration failures do not justify capability escalation.
+
+Capability escalation advances one rank for the failed logical Gate and never
+raises filesystem authority. It must not replay a successful WRITE Gate.
+Retries require a material delta and are bounded; identical prompt, evidence,
+environment, and strategy must not be repeated. Prefer deterministic
+verification, and invoke an independent READ-ONLY verifier only when remaining
+risk makes model review useful or mandatory. Cleanup failure forbids final
+SUCCESS.
 
 ## User Overrides
 

@@ -1,477 +1,213 @@
 # Adaptive Model Routing Policy
 
-Version: 0.1
-
-## 1. Purpose
-
-This policy defines how an Orca Coordinator dynamically assigns Codex
-workers based on task complexity, risk, dependencies, permissions,
-and expected reasoning requirements.
-
-The goal is not to maximize model capability.
-
-The goal is to use the least expensive sufficient worker while
-preserving correctness, operational safety, and independent verification
-where justified.
-
----
-
-## 2. Responsibility Boundary
-
-### Coordinator
-
-The Coordinator decides:
-
-- task boundaries
-- dependencies
-- concurrency
-- worker role
-- model
-- reasoning effort
-- filesystem authority
-- worktree placement
-- retry versus escalation
-- Fresh Verifier requirement
-
-### Orca
-
-Orca provides:
-
-- Runs
-- Tasks
-- Dispatches
-- supervised workers
-- messaging
-- worker lifecycle
-- decision gates
-- worktrees
-- model/effort launch parameters
-
-Orca must not be assumed to infer task conflicts or schedule workers
-on behalf of the Coordinator.
-
-### Worker
-
-A worker:
-
-- performs only its assigned task
-- stays within its assigned authority
-- reports blockers or uncertainty
-- does not independently expand scope
-- does not autonomously escalate to a higher model
-- sends worker_done exactly once for a supervised Dispatch
-
----
-
-## 3. Routing Levels
-
-### Level 1 — Routine
-
-Model:
-`gpt-5.6-luna`
-
-Effort:
-`low`
-
-Typical work:
-
-- file discovery
-- search
-- inventory
-- simple comparisons
-- repetitive inspection
-- test-result collection
-- metadata extraction
-
-Default authority:
-READ-ONLY
-
----
-
-### Level 2 — Standard
-
-Model:
-`gpt-5.6-terra`
-
-Effort:
-`medium`
-
-Typical work:
-
-- ordinary implementation
-- code review
-- moderate debugging
-- isolated feature changes
-- refactoring with clear boundaries
-- test creation
-- implementation planning from established requirements
-
-Authority:
-
-- analysis/review: READ-ONLY
-- implementation: workspace-write
-
----
-
-### Level 3 — Complex
-
-Model:
-`gpt-5.6-terra`
-
-Effort:
-`high`
-
-Typical work:
-
-- async behavior
-- external service integration
-- multi-module bugs
-- difficult regressions
-- state-management complexity
-- complicated data transformations
-- substantial refactoring
-
-Default authority:
-
-- investigation: READ-ONLY
-- Lead implementation: workspace-write
-
----
-
-### Level 4 — Critical
-
-Model:
-`gpt-5.6-sol`
-
-Effort:
-`medium` by default
-
-Typical work:
-
-- authentication
-- authorization
-- security-sensitive changes
-- database schema/migrations
-- destructive data operations
-- architecture decisions
-- high ambiguity
-- high regression cost
-- high-confidence root-cause analysis after failed lower-tier attempts
-
-Escalate to `high` only for a concrete condition such as destructive migration,
-meaningful data-loss or corruption risk, rollback uncertainty, significant
-production-data integrity impact, multi-layer auth complexity, security
-vulnerability or attack-path analysis, very large architecture impact, high
-ambiguity, or insufficient confidence at Sol / medium. The routing decision must
-record the concrete reason.
-
-Authority is task-specific.
-
-Prefer READ-ONLY for architectural assessment and verification.
-Grant WRITE only when implementation ownership explicitly requires it.
-
----
-
-## 4. Escalation Policy
-
-Escalation is task-scoped.
-
-Do not escalate the entire project because one task becomes difficult.
-
-Preferred sequence:
-
-1. Re-evaluate the failure.
-2. Determine whether the issue is:
-   - implementation mistake
-   - missing context
-   - insufficient reasoning depth
-   - incorrect task decomposition
-   - actual model capability limit
-3. Increase effort when appropriate.
-4. Increase model class only when justified.
-
-Typical progression:
-
-Luna / low
-→ Terra / medium
-→ Terra / high
-→ Sol / medium
-→ Sol / high
-
-Do not automatically advance one level after every error.
-
-A syntax error, failing assertion, dependency install failure,
-or ordinary implementation bug is not by itself a model-escalation event.
-
----
-
-## 5. Mandatory Risk Floors
-
-Certain task classes have minimum routing requirements.
-
-### Database schema or migration
-
-Minimum:
-Terra / high
-
-Use Sol / high when:
-
-- migration is destructive
-- rollback is difficult
-- production data integrity is uncertain
-- multiple schemas or services are affected
-
-### Authentication / Authorization / Security
-
-Default:
-Sol / medium
-
-Escalate to Sol / high for multi-layer auth complexity, high-impact security,
-vulnerability or attack-path analysis, or insufficient Sol / medium confidence.
-
-Independent verification:
-recommended
-
-### External integrations
-
-Minimum:
-Terra / high when behavior is stateful, asynchronous,
-or failure handling is non-trivial.
-
-### Destructive operations
-
-Use:
-Sol / high assessment before execution when meaningful data loss is possible.
-
----
-
-## 6. Permission Policy
-
-Permission is independent from model strength.
-
-A Sol worker does not automatically receive WRITE authority.
-
-### READ-ONLY
-
-Use for:
-
-- research
-- inspection
-- review
-- impact analysis
-- dependency analysis
-- Fresh Verification
-
-READ-ONLY should be technically enforced using the Codex sandbox
-when available.
-
-### WRITE
-
-Use for:
-
-- implementation
-- tests requiring source modification
-- approved configuration changes
-
-Default:
-workspace-write
-
-Avoid unrestricted filesystem authority unless a concrete task
-requires it.
-
----
-
-## 7. Parallelism Policy
-
-Parallelize only genuinely independent work.
-
-Good candidates:
-
-- separate investigation questions
-- independent code-path inspection
-- documentation versus implementation research
-- independent verification
-- separate test analysis
-
-Poor candidates:
-
-- tightly coupled sequential implementation
-- multiple workers editing the same files
-- tasks where worker B depends materially on worker A findings
-- artificial fragmentation of a small change
-
-Default same-worktree policy:
-
-READ + READ:
-allowed in parallel
-
-READ + WRITE:
-allowed when investigation will not interfere with implementation
-
-WRITE + WRITE:
-normally prohibited when files or behavior overlap
-
-One Lead worker should own the main write path.
-
----
-
-## 8. Worktree Policy
-
-A fresh worker does not imply a fresh Git worktree.
-
-Prefer the required existing/current worktree unless:
-
-- isolation is explicitly required
-- filesystem conflicts make sharing unsafe
-- independent implementation branches are intentional
-- the user explicitly requests a separate worktree
-
-Do not create worktrees merely because several workers exist.
-
----
-
-## 9. Fresh Verifier
-
-Fresh Verifier must be independent from the implementation reasoning path.
-
-Default:
-
-Model:
-gpt-5.6-sol
-
-Effort:
-medium
-
-Authority:
-READ-ONLY
-
-Escalate a Fresh Verifier to high only for destructive migration, meaningful
-data-loss risk, rollback uncertainty, high-impact security, very large
-architecture impact, or a reported Sol / medium confidence failure.
-
-Verifier responsibilities:
-
-- inspect final changes
-- test assumptions
-- search for regressions
-- verify requirements
-- identify unsafe side effects
-- report findings without modifying files
-
-Do not automatically use Fresh Verifier for every trivial change.
-
----
-
-## 10. Retry Policy
-
-Retry and escalation are different.
-
-Retry when:
-
-- transient runtime failure occurred
-- worker process failed
-- setup failed
-- task input was malformed
-- implementation error is clearly recoverable at the same capability level
-
-Escalate when:
-
-- reasoning is inadequate
-- complexity was misclassified
-- critical risk was discovered
-- repeated failures indicate capability mismatch
-
-Respect Orca's task/dispatch failure handling and circuit breaker.
-Do not construct uncontrolled retry loops.
-
----
-
-## 11. Worker Completion
-
-A supervised worker must end by reporting worker_done through Orca.
-
-Coordinator then:
-
-- accepts and synthesizes the result
-- resolves follow-up ownership
-- reuses, retains, or releases the worker
-- dispatches dependent tasks only when their dependencies are satisfied
-
-A completed worker must not silently continue into unrelated work.
-
----
-
-## 12. Initial Routing Decision
-
-Before dispatching, the Coordinator should answer:
-
-1. Is the task READ or WRITE?
-2. Is it independent?
-3. Does it touch DB, auth, security, permissions, or destructive data?
-4. Does it involve async or external integration?
-5. Is the required change localized or architectural?
-6. What is the lowest capable model?
-7. What reasoning effort is sufficient?
-8. What would trigger escalation?
-9. Does independent verification materially reduce risk?
-
-Only then should the worker be launched.
-
----
-
-## 13. Guiding Rule
-
-Use intelligence economically.
-
-Do not route easy work to Sol merely because Sol is available.
-
-Do not route high-risk work to Luna merely because Luna is cheaper.
-
-Optimize total project cost and reliability, not the cost of one worker.
-
-## Mandatory Phase Separation
-
-Model selection and WRITE authority are separate decisions.
-
-For tasks involving database migration, authentication, authorization,
-security, destructive data operations, or meaningful production-data risk:
-
-1. Start with a READ-ONLY assessment task.
-2. Identify affected data, rollback requirements, dependencies, and failure modes.
-3. Only after assessment may the Coordinator dispatch a WRITE implementation task.
-4. Implementation and independent verification must remain separate assignments.
-
-A high-capability model does not justify skipping the READ-ONLY assessment phase.
-
-For complex external integrations involving async state, retries, timeouts,
-or synchronization:
-
-- prefer READ-ONLY diagnosis before WRITE implementation when the root cause
-  is not already established
-- combine diagnosis and implementation only when the change is sufficiently
-  localized and low-risk
-
-## Verification Threshold
-
-Do not create a Fresh Verifier merely because a task is complex.
-
-Fresh Verifier is:
-
-- required for destructive database migrations and meaningful data-loss risk
-- recommended for auth/security/architecture changes
-- conditional for async/external integrations based on actual regression risk
-- unnecessary for routine and ordinary localized changes
-
-## Escalation Ladder
-
-Do not skip capability levels without a concrete risk reason.
-
-Normal escalation:
-Luna/low -> Terra/medium -> Terra/high -> Sol/medium -> Sol/high
-
-Sol/high requires a concrete high-risk reason: destructive migration, meaningful
-data-loss or corruption risk, rollback uncertainty, complex multi-layer auth,
-security vulnerability or attack-path analysis, very large architecture impact,
-high ambiguity, insufficient Sol/medium confidence, or repeated lower-tier
-reasoning failures. A DB, auth, security, architecture, or Fresh Verifier label
-alone is not sufficient.
+Version: 0.2
+
+## Purpose and boundaries
+
+The Coordinator chooses task boundaries, ordering, capability, authority,
+placement, retries, escalation, verification, settlement, and cleanup. Orca
+provides lifecycle primitives; it is not an automatic scheduler. A worker never
+spawns a stronger worker. Linux `/home` placement, Codex sandbox enforcement,
+the Critical READ-before-WRITE gate, trusted lifecycle relay, and the ban on
+automatic `danger-full-access` remain mandatory.
+
+## Initial routing and task normalization
+
+Initial routing stays lowest-sufficient:
+
+| Level | Model / effort | Typical authority |
+|---|---|---|
+| Routine | Luna / low | READ_ONLY |
+| Standard | Terra / medium | role-dependent |
+| Complex | Terra / high | READ diagnosis, one WRITE Lead |
+| Critical | Sol / medium | role-dependent, phase-separated |
+
+Concrete destructive migration, meaningful data-loss or rollback risk,
+high-impact security, very large architecture impact, or high ambiguity may
+start at Sol/high. Initial routing never uses xhigh.
+
+The Router normalizes a `TaskBrief` with objective, requested actions,
+forbidden scope, READ_ONLY constraint, positive risk signals, and language.
+Only requested actions and positive risk signals influence the route. English
+and Korean signals cover READ, WRITE, Standard, Complex, Critical, and high-risk
+work. Negative scope such as “DB는 변경하지 않는다” or “authentication is out
+of scope” is removed before risk matching. Equivalent Korean and English tasks
+must produce the same model, effort, authority, phase plan, risk floor, and
+verifier policy.
+
+## Capability ladder and risk floor
+
+The single policy ladder is:
+
+```text
+rank 0 Luna/low
+rank 1 Terra/medium
+rank 2 Terra/high
+rank 3 Sol/medium
+rank 4 Sol/high
+rank 5 Sol/xhigh
+```
+
+`capability_rank`, `capability_at`, and `next_capability` implement this order.
+Rank is policy ordering, not an exact price model; call counts, effort counts,
+workers, attempts, elapsed time, and available token usage are separate cost
+metrics.
+
+Capability failure advances exactly one rank for the failed logical Gate.
+Capability never changes authority and the same Gate never downgrades. A newly
+confirmed authentication, security, DB, or data-integrity risk may instead
+apply the required risk floor immediately. “Hard” and “risky” are separate
+decisions.
+
+Sol/xhigh is allowed only after the same Gate ran at Sol/high, remains unresolved,
+and additional reasoning is plausibly useful for high ambiguity, conflicting
+evidence, high-impact security/data/architecture, production verification, or
+an untrusted root cause. Permission, credentials, plan limits, outages, quota,
+user action, unsupported features, Orca/placement errors, syntax failures,
+missing evidence, and wrong deployment targets never justify xhigh. Default
+budgets are one xhigh attempt per Gate and one per run. xhigh is the automatic
+ceiling; Sol/max is outside v0.2.
+
+## Lifecycle, logical Gates, and attempts
+
+`LIFECYCLE_DONE != TASK_SUCCESS`. `worker_done` only closes the worker lifecycle.
+Each plan phase is a logical Gate with its own attempt history. Every attempt
+records its parent, phase, model, effort, rank, authority, classification,
+decision, material retry delta, file changes, workspace/target fingerprints,
+elapsed time, and invalidation evidence.
+
+Escalation and retry rerun only the failed Gate. Successful assessment or WRITE
+Gates are not replayed when verification needs more reasoning. A prior Gate is
+reopened only when new objective evidence invalidates it, such as a verifier's
+`TARGET_FAILED`; the invalidated Gate and evidence are recorded. Only one
+mutation attempt may be active per Gate, and the previous worker must be
+settled, stopped, released, or fenced before another WRITE attempt. Cleanup
+failure forbids final SUCCESS.
+
+## Worker result and success evidence
+
+Results are normalized in this order: structured v2 fields, legacy Orca
+envelopes, then bounded text. Strict JSON is not required, but a lifecycle event
+or the word “completed” is not success evidence.
+
+| Phase | Minimum success evidence |
+|---|---|
+| Investigation | conclusion, evidence, checked files/tools, unresolved questions |
+| Assessment | risks, impact, rollback/recovery, WRITE readiness, uncertainty |
+| Implementation | actual/reported changed files match, requirement results, tests and results, skipped verification, current diff |
+| Verification | explicit `VERIFIED`; `NOT_VERIFIED`, `INCONCLUSIVE`, and `TARGET_FAILED` remain non-success |
+
+Test failures or a mismatch between reported and actual changed files prevent
+false SUCCESS. If tool results exist but the report is incomplete, repair or
+collect evidence instead of repeating implementation or escalating capability.
+
+Evidence freshness records Git head, dirty/change fingerprints, target or
+deployment identity, URL when applicable, and verification time. Implementation
+commit, deployment commit, deployment, and verification target must agree.
+Stale or mismatched evidence is repaired before reasoning escalation.
+
+## Failure classification and decisions
+
+| Failure class | Default decision | Retry | Capability escalation | Terminal condition |
+|---|---|---:|---:|---|
+| INSUFFICIENT_SUCCESS_EVIDENCE | RESULT_REPAIR / COLLECT_EVIDENCE | bounded | no | repair budget exhausted |
+| EVIDENCE_GAP | COLLECT_EVIDENCE | bounded | no | evidence unavailable |
+| STALE_EVIDENCE | COLLECT_EVIDENCE | bounded | no | current target unavailable |
+| ENVIRONMENT_MISMATCH | COLLECT_EVIDENCE | bounded | no | correct environment unavailable |
+| TARGET_IDENTITY_MISMATCH | COLLECT_EVIDENCE | bounded | no | target cannot be reconciled |
+| TRANSIENT_FAILURE | RETRY_SAME_CAPABILITY | once | not initially | retry budget exhausted |
+| RECOVERABLE_IMPLEMENTATION_FAILURE | RETRY_SAME_CAPABILITY | once | not initially | retry/recovery exhausted |
+| CAPABILITY_FAILURE | ESCALATE_CAPABILITY | no | exact +1 | ceiling/budget |
+| AMBIGUOUS_FAILURE | focused retry | once | on repetition, +1 | ceiling/budget |
+| DECOMPOSITION_FAILURE | REPLAN / READ diagnosis | bounded | not initially | no viable plan |
+| MISSING_CONTEXT | acquire context / BLOCKED | no | no | required context unavailable |
+| EXTERNAL_BLOCKER | BLOCKED | no | no | external condition remains |
+| USER_ACTION_REQUIRED | BLOCKED | no | no | user action required |
+| ORCHESTRATION_FAILURE | recover / TERMINAL | no | no | runtime cannot recover safely |
+| TERMINAL_FAILURE | FAILED / BLOCKED | no | no | immediately terminal |
+
+Classification trusts system/tool results, structured Orca status, concrete
+codes, and workspace/target evidence before worker hints or free text. A worker's
+capability hint is not authoritative. Low-confidence text remains ambiguous.
+Classification and `AdaptiveDecision` are separate types; public phase status is
+not overloaded with internal control decisions. No extra classifier worker is
+used on the happy path.
+
+Questions are first-class lifecycle events. Requests for user input, approval,
+credentials, access, or policy decisions become `USER_ACTION_REQUIRED` and
+BLOCKED. Coordinator-known facts may answer a question without user interaction.
+A question never disappears as a timeout or triggers capability escalation.
+
+## Retry, WRITE recovery, and side effects
+
+Same-level retry is normally limited to one per rank for transient, recoverable,
+or first ambiguous failures. Every retry records a material delta: new evidence,
+corrected input or target, narrower task, restored runtime, clarified criteria,
+or changed implementation state. Identical prompt, evidence, environment,
+strategy, and failure signature is forbidden. Two consecutive attempts without
+new evidence trip the no-progress circuit breaker. Gate/run attempt caps ensure
+all runs terminate.
+
+A failed WRITE may have changed files. The Coordinator captures actual diff and
+passes it in a bounded evidence packet; it never automatically reverts. Except
+for clearly recoverable local mistakes or safe transient failure, a READ_ONLY
+diagnostic Gate determines root cause and scope before WRITE is reopened.
+Capability and authority remain independent during diagnosis and escalation.
+
+Deployment triggers, external write APIs, production mutation, billing, and data
+changes are not automatically repeated unless idempotency, non-execution, or a
+safe rollback/retry condition is objectively established. Otherwise use a
+READ_ONLY assessment or BLOCKED.
+
+## Verification policy
+
+Verification modes are `DETERMINISTIC_ONLY`, `MODEL_REVIEW`, and `HYBRID`.
+Deterministic checks (tests, type/lint/schema checks, Git diff, API status,
+deployment commit and response) run first. Low-risk local work with sufficient
+deterministic coverage does not receive a Sol verifier merely because
+implementation succeeded.
+
+Model review is used for semantic design, policy, UX, multi-module interaction,
+or remaining regression risk. Critical DB/auth/security/data-loss and
+non-idempotent operations use HYBRID. Fresh Verifier defaults to Sol/medium and
+READ_ONLY, independent from the implementer. It receives requirements,
+acceptance criteria, workspace state, tests, and objective facts—not an
+implementer's unbounded reasoning transcript.
+
+`INCONCLUSIVE` receives one focused verifier retry, then verifier-Gate capability
+may rise. `TARGET_FAILED` reopens the Implementation Gate, repairs the confirmed
+defect, and performs fresh verification. Escalating only the verifier after a
+confirmed implementation defect is incorrect.
+
+## Bounded evidence and observability
+
+The evidence packet carries the logical Gate, up to three prior attempt
+summaries, verified facts, attempted actions, failure and reason, unresolved
+questions, changed files, test results, target fingerprint, evidence references,
+and escalation reason. It excludes raw transcripts, secrets, tokens, and
+credentials. Packet and phase-spec sizes stay bounded as attempts grow.
+
+Machine-readable schema v2 retains v1 fields (`final_status`, `phase_list`,
+`models`, `routing_plan`, `cleanup_result`) and adds `result_schema_version`,
+`logical_gates`, `attempt_history`, `adaptive_decisions`, and `cost_metrics`.
+Decision traces include Gate/attempt IDs, rank/capability, authority, failure,
+confidence, decision/reason, retry delta, new-evidence flag, changed files,
+fingerprints, verification mode, terminal/blocker cause, and elapsed time.
+
+## Cost and quality benchmark
+
+The representative corpus covers Routine, Standard, Complex, Critical, failure
+recovery, external blockers, ambiguous verification, evidence gaps, stale
+deployment, Korean/English tasks, and de-identified field replays. It compares
+v0.1, an all-Sol/medium comparison policy, and v0.2.
+
+Lowest initial model alone is not proof of savings. Routine/Standard happy paths
+must preserve v0.1 route, worker count, and LLM Dispatch count. Failure recovery
+is judged by verified success, false-success reduction, manual intervention, and
+cost per verified success—not cheap early failure. v0.2 must have zero false
+SUCCESS, duplicate successful WRITE execution, external-blocker escalation,
+initial xhigh, identical retry, happy-path extra Dispatch, and authority
+escalation. Mixed-workload verified quality must not fall below v0.1 and its
+normalized compute proxy must remain below all-Sol/medium. Token metrics are
+reported when available; deterministic model/effort/attempt proxies are used
+otherwise.
