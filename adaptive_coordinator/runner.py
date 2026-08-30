@@ -942,18 +942,20 @@ class ProductionRunner:
                 "findings to the Coordinator. Include the required result fields and concise evidence values. "
                 "Serialize the complete object as compact UTF-8 JSON and keep it in memory (for example, a shell "
                 "variable). Do not create a temporary file or write anywhere to deliver it: READ-ONLY workers cannot "
-                "write to /tmp or the workspace. Your final tool call must invoke the installed `orca-adaptive "
+                "write to /tmp or the workspace. Your last tool call must invoke the installed `orca-adaptive "
                 "worker-report` helper exactly once with --result-json equal to that in-memory JSON and the exact --from, "
                 "--dispatch-capability, --task-id, and --dispatch-id values from the injected worker_done command. Do not "
                 "invoke `orca-ide orchestration send` yourself. The helper validates the result, attempts worker_done "
                 "exactly once with the three-sentence summary and matching outcome, compresses the full result, and "
-                "always prints exactly one final framed terminal marker. Never call worker-report or worker_done twice. "
+                "always prints exactly one framed marker. Never call worker-report or worker_done twice. "
                 "The marker is "
                 "durable terminal evidence for the Coordinator when a successful CLI response is not delivered through "
                 "the Orca inbox; it is not a second lifecycle message. Use this marker: "
                 "ADAPTIVE_RESULT_GZ64:<base64url gzip-compressed compact UTF-8 JSON, padding optional>:END_ADAPTIVE_RESULT "
                 "encoding the same compact JSON object. Whitespace inside the base64url payload is allowed for terminal "
-                "wrapping. Make the marker the final command output; after it, emit no prose and call no tool.")
+                "wrapping. After that tool call, copy its complete marker exactly once as your entire final assistant "
+                "response so it remains visible outside collapsed TUI tool output. Do not regenerate or alter the "
+                "marker, add other prose, or call another tool.")
 
     @staticmethod
     def _changed_paths(before: Mapping[str, str], after: Mapping[str, str]) -> list[str]:
