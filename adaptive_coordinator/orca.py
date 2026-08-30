@@ -8,6 +8,7 @@ import re
 import shlex
 import stat
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -153,6 +154,11 @@ class WorkerHandle:
 class OrcaAdapter:
     """Thin adapter: Coordinator owns decisions; Orca owns lifecycle primitives."""
 
+    # `terminal wait --for tui-idle` can win a short race with Orca's agent
+    # registry.  These are readiness retries for the *same* terminal, not new
+    # worker attempts and not a reason to change model capability.
+    WORKER_START_READINESS_DELAYS = (0.25, 0.5, 1.0, 2.0)
+
     def __init__(
         self,
         workspace: str | Path,
@@ -272,33 +278,65 @@ class OrcaAdapter:
                     "--json",
                 ]
             )
-            worker = self.runner(
-                [
-                    self.executable,
-                    "orchestration",
-                    "worker-start",
-                    "--run",
-                    run_id,
-                    "--task",
-                    task_id,
-                    "--terminal",
-                    terminal_handle,
-                    "--worktree",
-                    self.worktree_selector,
-                    "--json",
-                ]
-            )
-        except Exception:
-            self.runner(
-                [
-                    self.executable,
-                    "terminal",
-                    "close",
-                    "--terminal",
-                    terminal_handle,
-                    "--json",
-                ]
-            )
+            worker_start = [
+                self.executable,
+                "orchestration",
+                "worker-start",
+                "--run",
+                run_id,
+                "--task",
+                task_id,
+                "--terminal",
+                terminal_handle,
+                "--worktree",
+                self.worktree_selector,
+                "--json",
+            ]
+            for attempt in range(len(self.WORKER_START_READINESS_DELAYS) + 1):
+                try:
+                    worker = self.runner(worker_start)
+                    break
+                except CoordinatorError as exc:
+                    if exc.code != "agent_unconfigured" or attempt >= len(self.WORKER_START_READINESS_DELAYS):
+                        raise
+                    time.sleep(self.WORKER_START_READINESS_DELAYS[attempt])
+                    # Reconfirm that the same terminal is idle before asking
+                    # Orca to bind it again. No second terminal is created.
+                    self.runner(
+                        [
+                            self.executable,
+                            "terminal",
+                            "wait",
+                            "--terminal",
+                            terminal_handle,
+                            "--for",
+                            "tui-idle",
+                            "--timeout-ms",
+                            "10000",
+                            "--json",
+                        ]
+                    )
+        except Exception as start_error:
+            try:
+                self.runner(
+                    [
+                        self.executable,
+                        "terminal",
+                        "close",
+                        "--terminal",
+                        terminal_handle,
+                        "--json",
+                    ]
+                )
+            except Exception as close_error:
+                # Keep the original structured code so the Coordinator cannot
+                # mistake readiness or placement for model failure, while also
+                # making a possible residual terminal explicit.
+                code = start_error.code if isinstance(start_error, CoordinatorError) else None
+                raise CoordinatorError(
+                    f"{start_error}; created terminal cleanup failed: {close_error}",
+                    code=code,
+                ) from start_error
             raise
         dispatch_id = worker.get("dispatchId") or worker["dispatch"]["id"]
         return WorkerHandle(task_id, dispatch_id, terminal_handle, route, baseline_changes)
