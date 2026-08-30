@@ -79,7 +79,11 @@ base64url representation in memory, and makes one final shell compound tool
 call. The result contains required phase fields and concise evidence without
 echoing the Coordinator's input evidence packet. Its terminal envelope is
 gzip-compressed before base64url encoding so ordinary multi-file evidence stays
-below the TUI folding boundary without dropping exact changed paths. That
+below the TUI folding boundary without dropping exact changed paths. The GZ64
+payload is capped at 512 characters. Optional prose may be shortened to fit, but
+exact paths, identifiers, and required phase keys are never altered; a result
+that still cannot fit is reported as `INSUFFICIENT_SUCCESS_EVIDENCE`, never as
+a truncated success. That
 command attempts `worker_done` exactly once with the three-sentence summary as
 `--body`, then prints one final framed
 `ADAPTIVE_RESULT_GZ64:<base64url gzip-compressed compact UTF-8 JSON>:END_ADAPTIVE_RESULT`
