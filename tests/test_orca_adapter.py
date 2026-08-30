@@ -484,6 +484,39 @@ class OrcaAdapterTests(unittest.TestCase):
             [["orchestration", "check"]],
         )
 
+    def test_structured_worker_done_payload_is_collected_without_terminal_read(self) -> None:
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        original = self.adapter.runner
+        structured = {
+            "status": "succeeded",
+            "summary": "The policy was inspected. Its rules are consistent. No questions remain.",
+            "conclusion": "policy is consistent",
+            "evidence": ["AGENTS.md"],
+            "files_checked": ["AGENTS.md"],
+            "unresolved_questions": [],
+        }
+
+        def delivery(command):
+            if command[1:3] == ["orchestration", "check"]:
+                self.runner.commands.append(list(command))
+                return {"messages": [{
+                    "type": "worker_done",
+                    "taskId": "task",
+                    "dispatchId": "dispatch",
+                    "body": structured["summary"],
+                    "payload": structured,
+                }]}
+            return original(command)
+
+        self.adapter.runner = delivery
+        result = self.adapter.wait_for_completion("run", worker, 1000)
+        self.assertEqual(result["mode"], "worker_done")
+        self.assertEqual(result["result"], structured)
+        self.assertEqual(
+            [command[1:3] for command in self.runner.commands],
+            [["orchestration", "check"]],
+        )
+
     def test_prose_worker_done_polls_incomplete_then_wrapped_framed_result(self) -> None:
         worker = WorkerHandle(
             "task", "dispatch", "owned-terminal", route(Authority.READ_ONLY)

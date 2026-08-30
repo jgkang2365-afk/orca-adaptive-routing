@@ -74,18 +74,19 @@ ceiling; Sol/max is outside v0.2.
 
 Every dispatched phase first constructs one complete result object satisfying
 its phase contract. The object's `summary` string is exactly three sentences.
-The worker serializes the object as compact UTF-8 JSON, keeps both it and its
-base64url representation in memory, and makes one final shell compound tool
-call. The result contains required phase fields and concise evidence without
+The worker serializes the object as compact UTF-8 JSON, keeps it in memory, and
+makes one final call to the installed `orca-adaptive worker-report` helper. The
+result contains required phase fields and concise evidence without
 echoing the Coordinator's input evidence packet. Its terminal envelope is
 gzip-compressed before base64url encoding so ordinary multi-file evidence stays
 below the TUI folding boundary without dropping exact changed paths. The GZ64
 payload is capped at 512 characters. Optional prose may be shortened to fit, but
 exact paths, identifiers, and required phase keys are never altered; a result
 that still cannot fit is reported as `INSUFFICIENT_SUCCESS_EVIDENCE`, never as
-a truncated success. That
-command attempts `worker_done` exactly once with the three-sentence summary as
-`--body`, then prints one final framed
+a truncated success. The helper rejects result content containing its protected
+dispatch capability rather than persisting that secret in payload or terminal
+evidence. It validates the contract, attempts `worker_done` exactly once with
+the three-sentence summary as `--body`, then prints one final framed
 `ADAPTIVE_RESULT_GZ64:<base64url gzip-compressed compact UTF-8 JSON>:END_ADAPTIVE_RESULT`
 marker encoding the same compact JSON bytes regardless of the lifecycle CLI's
 exit status, with no later tool call or prose. The marker is durable terminal

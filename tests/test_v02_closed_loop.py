@@ -665,25 +665,19 @@ class ProductionClosedLoopTests(unittest.TestCase):
                 "The summary string itself must be exactly three sentences",
                 "do not echo it as an output field",
                 "Serialize the complete object as compact UTF-8 JSON and keep it in memory",
-                "Before lifecycle delivery, prepare a gzip-compressed base64url representation",
                 "Do not create a temporary file or write anywhere",
-                "encoded GZ64 payload must be at most 512 characters",
-                "never shorten or omit exact paths, identifiers, or required phase keys",
-                "never report a truncated success",
-                "Keep the exact three-sentence summary in a separate variable",
-                "Your final tool call must be one shell compound command",
-                "attempt worker_done exactly once with --body equal to the three-sentence summary",
-                "regardless of its exit status print exactly one final visible framed marker",
+                "Your final tool call must invoke the installed `orca-adaptive worker-report` helper exactly once",
+                "exact --from, --dispatch-capability, --task-id, and --dispatch-id values",
+                "Do not invoke `orca-ide orchestration send` yourself",
+                "attempts worker_done exactly once with the three-sentence summary and matching outcome",
+                "always prints exactly one final framed terminal marker",
                 "ADAPTIVE_RESULT_GZ64:<base64url gzip-compressed compact UTF-8 JSON, padding optional>",
                 "Make the marker the final command output",
             )
             positions = [spec.index(fragment) for fragment in ordered]
             self.assertEqual(positions, sorted(positions))
-            self.assertIn("Never call worker_done twice", spec)
+            self.assertIn("Never call worker-report or worker_done twice", spec)
             self.assertIn("encoding the same compact JSON object", spec)
-            self.assertIn("gzip -n -c", spec)
-            self.assertIn("INSUFFICIENT_SUCCESS_EVIDENCE", spec)
-            self.assertIn("set worker_done outcome consistently with the result status", spec)
             self.assertIn("READ-ONLY workers cannot write to /tmp or the workspace", spec)
             self.assertIn("durable terminal evidence for the Coordinator", spec)
             self.assertIn("it is not a second lifecycle message", spec)
