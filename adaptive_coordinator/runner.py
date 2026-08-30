@@ -14,7 +14,7 @@ from .models import (
     AdaptiveDecision, AttemptMetadata, Authority, EvidencePacket, FailureClass,
     LogicalGateState, Phase, Route, RoutingPlan, VerificationMode, VerificationOutcome,
 )
-from .orca import CoordinatorError, OrcaAdapter, WorkerHandle
+from .orca import CoordinatorError, LifecycleSettlementError, OrcaAdapter, WorkerHandle
 from .routing import SOL, Router, apply_risk_floor, capability_at, capability_rank, next_capability
 
 
@@ -191,6 +191,90 @@ def _strings(value: Any) -> tuple[str, ...]:
     return ()
 
 
+def _terminal_text(payload: Mapping[str, Any], limit: int = 65_536) -> str:
+    chunks: list[str] = []
+    remaining = limit
+
+    def collect(value: Any, key: str = "") -> None:
+        nonlocal remaining
+        if remaining <= 0:
+            return
+        if isinstance(value, Mapping):
+            for child_key, child in value.items():
+                collect(child, str(child_key).lower())
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for child in value:
+                collect(child, key)
+        elif isinstance(value, str) and key in {
+            "tail", "preview", "output", "finaloutput", "body", "text",
+        }:
+            bounded = value[-remaining:]
+            chunks.append(bounded)
+            remaining -= len(bounded)
+
+    collect(payload)
+    return "\n".join(chunks)
+
+
+def _final_marked_structured_result(
+    payload: Mapping[str, Any], limit: int = 65_536,
+) -> tuple[Mapping[str, Any] | None, str | None]:
+    """Decode the final marker and enforce that it is the visible output boundary."""
+    text = _terminal_text(payload, limit)
+    decoder = json.JSONDecoder()
+    marker = "ADAPTIVE_RESULT_JSON:"
+    marked = text.rfind(marker)
+    if marked < 0:
+        return None, None
+    start = marked + len(marker)
+    while start < len(text) and text[start].isspace():
+        start += 1
+    try:
+        value, end = decoder.raw_decode(text, start)
+    except json.JSONDecodeError:
+        return None, "final ADAPTIVE_RESULT_JSON marker is malformed or truncated"
+    trailing = text[end:]
+    # TUI color/reset/control sequences are ignorable; printable output is not.
+    trailing = re.sub(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))", "", trailing)
+    semantic_failure = (
+        r"\b[1-9][0-9]*\s+(?:tests?\s+)?failed\b", r"\bassertion(?:error| failed| failure)?\b",
+        r"\bworker crashed\b", r"\bfatal error\b", r"\btraceback\b",
+        r"\bprocess exited with code\s+[1-9][0-9]*\b",
+    )
+    transport_noise = (
+        r"transport (?:error|failure):\s*(?:wsl\s+)?vsock(?: endpoint)?\s+(?:unavailable|failed|refused)",
+        r"worker_done delivery (?:failed|failure|error)(?::\s*(?:wsl\s+)?vsock(?: endpoint)?\s+(?:unavailable|failed|refused))?",
+        r"lifecycle transport (?:failed|failure|error)(?::\s*(?:wsl\s+)?vsock(?: endpoint)?\s+(?:unavailable|failed|refused))?",
+        r"(?:failed|unable) to (?:send|deliver) worker_done via (?:wsl\s+)?vsock",
+    )
+    trailing_lines = [line.strip() for line in trailing.splitlines() if line.strip()]
+    if any(any(re.search(pattern, line, flags=re.IGNORECASE) for pattern in semantic_failure)
+           or not any(re.fullmatch(pattern, line, flags=re.IGNORECASE) for pattern in transport_noise)
+           for line in trailing_lines):
+        return None, "substantive output exists after final ADAPTIVE_RESULT_JSON marker"
+    if not (isinstance(value, Mapping) and value.get("status") is not None
+            and any(key in value for key in (
+                "conclusion", "evidence", "files_modified", "tests_run",
+                "verification_outcome", "risks", "write_ready"))):
+        return None, "final ADAPTIVE_RESULT_JSON does not satisfy the worker result contract"
+    return value, None
+
+
+def _explicit_orca_failure_status(payload: Mapping[str, Any]) -> str | None:
+    failed = {"failed", "failure", "error", "blocked", "cancelled", "canceled", "crashed"}
+    for candidate in _messages(payload):
+        value = candidate.get("status")
+        statuses: list[str] = []
+        if isinstance(value, Mapping):
+            statuses.extend(str(item).lower() for item in value.values())
+        elif value is not None:
+            statuses.append(str(value).lower())
+        match = next((status for status in statuses if status in failed), None)
+        if match:
+            return match
+    return None
+
+
 class ResultNormalizer:
     """Accept structured v2, legacy Orca envelopes, then bounded text fallback."""
 
@@ -198,23 +282,26 @@ class ResultNormalizer:
     def normalize(payload: Any) -> NormalizedWorkerResult:
         if not isinstance(payload, Mapping):
             return NormalizedWorkerResult("unknown", _summary(payload))
-        candidates = list(_messages(payload))
+        marked_result, marker_error = _final_marked_structured_result(payload)
+        marked_results = [marked_result] if marked_result is not None else []
+        candidates = [*list(_messages(payload)), *marked_results]
         selected = max(candidates, key=lambda item: sum(key in item for key in (
             "status", "summary", "evidence", "files_modified", "tests_run", "verification_outcome")))
-        # Real worker-read payloads may wrap a structured final result in a
-        # bounded terminal/output string. Recover that object without requiring
-        # every legacy worker to emit a strict top-level JSON envelope.
+        selected_status = selected.get("status")
+        if isinstance(selected_status, Mapping):
+            selected_status = selected_status.get("worker") or selected_status.get("terminal")
+        selected_failed = str(selected_status).lower() in {
+            "failed", "failure", "error", "blocked", "cancelled", "canceled", "crashed",
+        }
+        explicit_failure = _explicit_orca_failure_status(payload)
+        if marker_error or (explicit_failure and not selected_failed):
+            failure = marker_error or f"Orca status {explicit_failure}"
+            return NormalizedWorkerResult(
+                "FAILED", _summary(payload) or failure,
+                reason=f"visible worker failure: {failure}",
+                fields={"terminal_failure": failure},
+            )
         textual = _summary(selected) or _summary(payload)
-        if not any(key in selected for key in ("evidence", "files_modified", "verification_outcome")):
-            candidate = textual.strip().removeprefix("```json").removesuffix("```").strip()
-            start, end = candidate.find("{"), candidate.rfind("}")
-            if start >= 0 and end > start:
-                try:
-                    decoded = json.loads(candidate[start:end + 1])
-                except json.JSONDecodeError:
-                    decoded = None
-                if isinstance(decoded, Mapping):
-                    selected = decoded
         status_value = selected.get("status", payload.get("status", "unknown"))
         if isinstance(status_value, Mapping):
             status_value = status_value.get("worker") or status_value.get("terminal") or "unknown"
@@ -521,6 +608,7 @@ class ProductionRunner:
             normalized = NormalizedWorkerResult("unknown", "")
             decision = AdaptiveDecision.TERMINAL
             diagnosis_no_progress = False
+            lifecycle_settled = False
             try:
                 evidence_source = gate.parent_gate_id or gate.evidence_source_gate_id
                 packet = (self._evidence_packet(result.logical_gates[evidence_source])
@@ -533,10 +621,13 @@ class ProductionRunner:
                 worker = adapter.start_worker(run_id, task_id, route, assessment_approved=assessment_approved)
                 phase.dispatch_id = worker.dispatch_id
                 completion = adapter.wait_for_completion(run_id, worker, self.timeout_ms)
+                mode = completion.get("mode")
+                lifecycle_settled = mode == "worker_done"
                 explicit_failure: FailureClassification | None = None
-                if completion.get("mode") == "escalation":
+                if mode == "escalation":
                     finding = _summary(completion.get("message", completion))
                     adapter.settle_escalation(run_id, worker, finding)
+                    lifecycle_settled = True
                     if finding and finding not in gate.verified_facts:
                         gate.verified_facts.append(finding)
                     new_brief = self.router.normalize(finding)
@@ -548,12 +639,26 @@ class ProductionRunner:
                     else:
                         explicit_failure = FailureClassification(
                             FailureClass.CAPABILITY_FAILURE, "medium", "worker_escalation", (finding,))
-                elif completion.get("mode") == "question":
+                    normalized = NormalizedWorkerResult(
+                        "FAILED", finding, failure_class_hint="CAPABILITY_FAILURE",
+                        reason="worker requested Coordinator reclassification", evidence=(finding,))
+                elif mode == "question":
+                    question = _summary(completion.get("message", completion))
                     explicit_failure = FailureClassification(
                         FailureClass.USER_ACTION_REQUIRED, "high", "question_event",
-                        (_summary(completion.get("message", completion)),))
-                raw = adapter.read_result(worker)
-                normalized = ResultNormalizer.normalize(raw)
+                        (question,))
+                    normalized = NormalizedWorkerResult(
+                        "BLOCKED", question, reason="worker question requires resolution",
+                        needs_user_input=True, evidence=(question,))
+                else:
+                    try:
+                        raw = adapter.read_result(worker)
+                    except Exception as exc:
+                        if lifecycle_settled:
+                            raise LifecycleSettlementError(
+                                f"result read failed after lifecycle settlement: {exc}") from exc
+                        raise
+                    normalized = ResultNormalizer.normalize(raw)
                 if (route.authority is Authority.WORKSPACE_WRITE
                         and self._non_idempotent_intent(task)
                         and not any(normalized.fields.get(key) for key in (
@@ -677,7 +782,17 @@ class ProductionRunner:
                     phase.status = (PhaseStatus.ESCALATION_REQUESTED if completion.get("mode") == "escalation"
                                     else PhaseStatus.BLOCKED if decision is AdaptiveDecision.BLOCKED
                                     else PhaseStatus.FAILED)
-                    adapter.fail_task(run_id, task_id, reason)
+                    if mode != "escalation":
+                        try:
+                            if lifecycle_settled:
+                                adapter.fail_task(run_id, task_id, reason)
+                            elif hasattr(adapter, "fail_worker"):
+                                adapter.fail_worker(run_id, worker, reason)
+                            else:
+                                adapter.fail_task(run_id, task_id, reason)
+                        except CoordinatorError as exc:
+                            raise LifecycleSettlementError(
+                                f"failure task settlement failed: {exc}") from exc
                     if decision is AdaptiveDecision.REOPEN_IMPLEMENTATION:
                         completed_phases.discard(Phase.IMPLEMENTATION)
                         attempt.prior_gate_invalidated = True
@@ -723,6 +838,20 @@ class ProductionRunner:
                         result.final_status = PhaseStatus.BLOCKED if decision is AdaptiveDecision.BLOCKED else PhaseStatus.FAILED
                 attempt.decision = decision.value
                 self._record_decision(result, attempt, decision)
+            except LifecycleSettlementError as exc:
+                decision = AdaptiveDecision.TERMINAL
+                reason = f"lifecycle settlement failed; no worker retry: {exc}"
+                phase.status = PhaseStatus.FAILED
+                phase.error = reason
+                attempt.failure_class = FailureClass.ORCHESTRATION_FAILURE.value
+                attempt.classification_confidence = "high"
+                attempt.decision = decision.value
+                attempt.decision_reason = reason
+                attempt.terminal_reason = reason
+                gate.status = "TERMINAL"
+                result.final_status = PhaseStatus.FAILED
+                queue.clear()
+                self._record_decision(result, attempt, decision)
             except CoordinatorError as exc:
                 error_result = NormalizedWorkerResult("FAILED", "", reason=str(exc))
                 failure = FailureClassifier.classify(route, {"mode": "adapter_error"}, error_result, str(exc))
@@ -746,7 +875,11 @@ class ProductionRunner:
                 attempt.blocker_kind = "MODEL_UNAVAILABLE" if decision is AdaptiveDecision.BLOCKED else None
                 attempt.terminal_reason = reason if decision is AdaptiveDecision.TERMINAL else None
                 if phase.task_id:
-                    try: adapter.fail_task(run_id, phase.task_id, reason)
+                    try:
+                        if worker is not None and hasattr(adapter, "fail_worker"):
+                            adapter.fail_worker(run_id, worker, reason)
+                        else:
+                            adapter.fail_task(run_id, phase.task_id, reason)
                     except Exception: pass
                 self._schedule_decision(queue, route, gate_id, gate, decision, result, error_result)
                 self._record_decision(result, attempt, decision)
@@ -756,12 +889,21 @@ class ProductionRunner:
                 attempt.failure_class = FailureClass.ORCHESTRATION_FAILURE.value
                 attempt.classification_confidence = "high"; attempt.decision = AdaptiveDecision.TERMINAL.value
                 if phase.task_id:
-                    try: adapter.fail_task(run_id, phase.task_id, str(exc))
+                    try:
+                        if worker is not None and hasattr(adapter, "fail_worker"):
+                            adapter.fail_worker(run_id, worker, str(exc))
+                        else:
+                            adapter.fail_task(run_id, phase.task_id, str(exc))
                     except Exception: pass
                 result.final_status = PhaseStatus.BLOCKED
             finally:
                 elapsed = time.monotonic() - attempt_started
                 attempt.elapsed_time = elapsed; result.cost_metrics.record(route, elapsed)
+                try:
+                    current_changes = dict(adapter.change_detector())
+                    attempt.files_changed = tuple(self._changed_paths(gate.baseline_changes, current_changes))
+                except Exception:
+                    pass
                 if result.adaptive_decisions and result.adaptive_decisions[-1].get("attempt_id") == attempt.attempt_id:
                     result.adaptive_decisions[-1]["elapsed_time"] = elapsed
                 cleanup_ok_for_attempt = worker is None
@@ -829,7 +971,10 @@ class ProductionRunner:
                 f"phase: {route.phase.value}; role: {route.role}; authority: {route.authority.value}. "
                 "Read AGENTS.md. Do only this gate; do not spawn workers. Return a structured result compatible with JSON "
                 f"including status, summary and: {contract}. Evidence packet (bounded): {packet}. "
-                "Report escalation findings to the Coordinator. Send worker_done exactly once.")
+                "Report escalation findings to the Coordinator. First attempt worker_done exactly once with the structured result. "
+                "Regardless of whether lifecycle delivery succeeds, then finish with exactly one final visible single-line "
+                "ADAPTIVE_RESULT_JSON:<compact JSON object> containing the same result and no prose after it. "
+                "Do not call any tool after printing that final marker.")
 
     @staticmethod
     def _changed_paths(before: Mapping[str, str], after: Mapping[str, str]) -> list[str]:

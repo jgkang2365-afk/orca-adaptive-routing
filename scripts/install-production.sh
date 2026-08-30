@@ -31,8 +31,7 @@ LAUNCHER="$TARGET/orca-adaptive"
 cat > "$LAUNCHER" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-export PYTHONPATH='$TARGET'
-exec python3 -c 'from adaptive_coordinator.cli import main; raise SystemExit(main())' "\$@"
+exec python3 -I -c 'import sys; target=sys.argv.pop(1); sys.path.insert(0,target); from adaptive_coordinator.cli import main; raise SystemExit(main())' '$TARGET' "\$@"
 EOF
 chmod 0755 "$LAUNCHER"
 ln -sfn "$LAUNCHER" "$BIN_ROOT/orca-adaptive"

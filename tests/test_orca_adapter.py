@@ -1,14 +1,22 @@
 import json
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from adaptive_coordinator.models import Authority, Phase, Route
 from adaptive_coordinator.orca import (
+    CoordinatorError,
+    LifecycleSettlementError,
     OrcaAdapter,
     SafetyGateError,
     WorkerHandle,
     _parse_orca_output,
+    _default_runner,
+    _git_changes,
 )
+from adaptive_coordinator.runner import ProductionRunner, ResultNormalizer, SuccessEvidenceGate
 
 
 def route(authority: Authority, *, critical: bool = False) -> Route:
@@ -81,6 +89,48 @@ class OrcaAdapterTests(unittest.TestCase):
         self.assertEqual(command[approval + 1], "never")
         self.assertNotIn("--approve-for-me", command)
 
+    def test_git_change_detector_captures_mode_only_change_and_blocks_empty_report(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="orca-git-fingerprint.") as directory:
+            repo = Path(directory)
+            script = repo / "probe.sh"
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "core.filemode", "true"], check=True)
+            script.write_text("#!/bin/sh\nexit 0\n")
+            script.chmod(0o644)
+            subprocess.run(["git", "-C", str(repo), "add", "probe.sh"], check=True)
+            before = dict(_git_changes(repo))
+            script.chmod(0o600)
+            permission_only = dict(_git_changes(repo))
+            self.assertEqual(permission_only, before)
+            script.chmod(0o755)
+            after = dict(_git_changes(repo))
+            changed = ProductionRunner._changed_paths(before, after)
+            self.assertEqual(changed, ["probe.sh"])
+            normalized = ResultNormalizer.normalize({
+                "status": "completed", "summary": "done", "files_modified": [],
+                "requirements_completed": ["done"], "tests_run": ["unit"],
+                "test_results": ["1 passed"], "unexecuted_verification": [],
+                "workspace_diff": [],
+            })
+            self.assertFalse(SuccessEvidenceGate.evaluate(
+                route(Authority.WORKSPACE_WRITE), normalized, changed)[0])
+
+    def test_git_change_detector_captures_index_only_transition(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="orca-git-index.") as directory:
+            repo = Path(directory)
+            target = repo / "probe.txt"
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            target.write_text("base\n")
+            subprocess.run(["git", "-C", str(repo), "add", "probe.txt"], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=Test", "-c",
+                 "user.email=test@example.invalid", "commit", "-qm", "base"], check=True)
+            target.write_text("changed\n")
+            unstaged = dict(_git_changes(repo))
+            subprocess.run(["git", "-C", str(repo), "add", "probe.txt"], check=True)
+            staged = dict(_git_changes(repo))
+            self.assertEqual(ProductionRunner._changed_paths(unstaged, staged), ["probe.txt"])
+
     def test_worker_start_uses_custom_terminal_then_supervised_dispatch(self) -> None:
         worker = self.adapter.start_worker("run_test", "task_test", route(Authority.READ_ONLY))
         self.assertEqual(worker.dispatch_id, "ctx_test")
@@ -143,6 +193,127 @@ class OrcaAdapterTests(unittest.TestCase):
         )
         update = self.runner.commands[-1]
         self.assertEqual(update[update.index("--status") + 1], "failed")
+
+    def test_failed_worker_is_fenced_before_task_update_and_release(self) -> None:
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        self.adapter.fail_worker("run", worker, "evidence invalid")
+        released = self.adapter.release(worker)
+        self.assertEqual(released["state"], "released")
+        self.assertEqual(
+            [command[1:3] for command in self.runner.commands],
+            [["orchestration", "worker-stop"], ["orchestration", "task-update"],
+             ["orchestration", "worker-release"]],
+        )
+
+    def test_already_settled_fence_is_idempotent_and_task_updates_once(self) -> None:
+        original = self.adapter.runner
+        stops = 0
+
+        def already_settled(command):
+            nonlocal stops
+            if command[1:3] == ["orchestration", "worker-stop"]:
+                stops += 1
+                raise CoordinatorError("No active worker for this Dispatch", code="stop_unknown")
+            return original(command)
+
+        self.adapter.runner = already_settled
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        self.adapter.fail_worker("run", worker, "invalid evidence")
+        self.assertEqual(stops, 1)
+        updates = [command for command in self.runner.commands
+                   if command[1:3] == ["orchestration", "task-update"]]
+        self.assertEqual(len(updates), 1)
+
+    def test_unknown_stop_error_is_not_silently_accepted(self) -> None:
+        def unknown_stop(command):
+            if command[1:3] == ["orchestration", "worker-stop"]:
+                raise CoordinatorError("unexpected state", code="stop_unknown")
+            return self.runner(command)
+
+        self.adapter.runner = unknown_stop
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        with self.assertRaises(LifecycleSettlementError):
+            self.adapter.fail_worker("run", worker, "invalid evidence")
+
+    def test_adversarial_terminal_word_does_not_imply_settled_fence(self) -> None:
+        def corrupt_registry(command):
+            if command[1:3] == ["orchestration", "worker-stop"]:
+                raise CoordinatorError(
+                    "terminal registry corruption; state unknown", code="stop_unknown")
+            return self.runner(command)
+
+        self.adapter.runner = corrupt_registry
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        with self.assertRaises(LifecycleSettlementError):
+            self.adapter.fail_worker("run", worker, "invalid evidence")
+
+    def test_adversarial_external_word_does_not_imply_external_terminal(self) -> None:
+        def corrupt_registry(command):
+            if command[1:3] == ["orchestration", "worker-stop"]:
+                raise CoordinatorError(
+                    "external registry corruption; state unknown", code="stop_unknown")
+            return self.runner(command)
+
+        self.adapter.runner = corrupt_registry
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        with self.assertRaises(LifecycleSettlementError):
+            self.adapter.fail_worker("run", worker, "invalid evidence")
+
+    def test_adversarial_completed_word_does_not_imply_settled_dispatch(self) -> None:
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        for message in (
+            "dispatch registry corruption but wrongly marked completed",
+            "dispatch ??? is completed",
+        ):
+            with self.subTest(message=message):
+                def corrupt_registry(command, error_message=message):
+                    if command[1:3] == ["orchestration", "worker-stop"]:
+                        raise CoordinatorError(error_message, code="stop_unknown")
+                    return self.runner(command)
+
+                self.adapter.runner = corrupt_registry
+                with self.assertRaises(LifecycleSettlementError):
+                    self.adapter.fail_worker("run", worker, "invalid evidence")
+
+    def test_known_external_terminal_stop_reason_is_accepted(self) -> None:
+        original = self.adapter.runner
+
+        def external_terminal(command):
+            if command[1:3] == ["orchestration", "worker-stop"]:
+                raise CoordinatorError(
+                    "Worker is backed by an external terminal", code="stop_unknown")
+            return original(command)
+
+        self.adapter.runner = external_terminal
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        self.adapter.fail_worker("run", worker, "invalid evidence")
+        updates = [command for command in self.runner.commands
+                   if command[1:3] == ["orchestration", "task-update"]]
+        self.assertEqual(len(updates), 1)
+
+    def test_default_runner_preserves_orca_error_code(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["orca-ide"], 1,
+            stdout='{"ok":false,"error":{"code":"stop_unknown","message":"No active worker"}}',
+            stderr="",
+        )
+        with patch("adaptive_coordinator.orca.subprocess.run", return_value=completed):
+            with self.assertRaises(CoordinatorError) as raised:
+                _default_runner(["orca-ide", "orchestration", "worker-stop"])
+        self.assertEqual(raised.exception.code, "stop_unknown")
+
+    def test_task_update_failure_after_fence_is_lifecycle_error(self) -> None:
+        def settlement_failure(command):
+            if command[1:3] == ["orchestration", "worker-stop"]:
+                return {"state": "stopped"}
+            if command[1:3] == ["orchestration", "task-update"]:
+                raise CoordinatorError("task settlement unavailable")
+            return self.runner(command)
+
+        self.adapter.runner = settlement_failure
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        with self.assertRaises(LifecycleSettlementError):
+            self.adapter.fail_worker("run", worker, "invalid evidence")
 
 
 if __name__ == "__main__":

@@ -34,7 +34,12 @@ class ProductionInstallerTests(unittest.TestCase):
         shutil.copy2(INSTALLER, self.repo / "scripts" / INSTALLER.name)
         (self.repo / "adaptive_coordinator" / "__init__.py").write_text('VALUE = "committed"\n')
         (self.repo / "adaptive_coordinator" / "cli.py").write_text(
-            "def main():\n    return 0\n"
+            "def main():\n"
+            "    from pathlib import Path\n"
+            "    from adaptive_coordinator import VALUE\n"
+            "    print(VALUE)\n"
+            "    print((Path(__file__).resolve().parent.parent / 'INSTALL_COMMIT').read_text().strip())\n"
+            "    return 0\n"
         )
         (self.repo / "pyproject.toml").write_text(
             '[project]\nname = "orca-adaptive-routing"\nversion = "9.9.9"\n'
@@ -115,6 +120,13 @@ class ProductionInstallerTests(unittest.TestCase):
                 path,
             )
         self.assertFalse((target / "adaptive_coordinator" / "untracked_probe.py").exists())
+
+    def test_i6_launcher_ignores_dirty_source_package_from_source_cwd(self) -> None:
+        result = self.install_result()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (self.repo / "adaptive_coordinator" / "__init__.py").write_text('VALUE = "dirty-source"\n')
+        invoked = run(str(self.bin / "orca-adaptive"), cwd=self.repo)
+        self.assertEqual(invoked.stdout.splitlines(), ["committed", self.commit])
 
 
 if __name__ == "__main__":
