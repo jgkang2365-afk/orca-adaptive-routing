@@ -694,6 +694,12 @@ class ProductionClosedLoopTests(unittest.TestCase):
             self.assertIn("Never call worker-report or worker_done twice", spec)
             self.assertIn("encoding the same compact JSON object", spec)
             self.assertIn("READ-ONLY workers cannot write to /tmp or the workspace", spec)
+            if "Implement" in task:
+                self.assertIn("test_results must use exactly one of two non-mixing forms", spec)
+                self.assertIn("(A) a one-entry list", spec)
+                self.assertIn("(B) one or more entries all exactly", spec)
+                self.assertIn("`check_name: passed (optional detail)`", spec)
+                self.assertIn("expected denial or blocked operation, use form B", spec)
             self.assertIn("durable terminal evidence for the Coordinator", spec)
             self.assertIn("it is not a second lifecycle message", spec)
             self.assertIn("outside collapsed TUI tool output", spec)

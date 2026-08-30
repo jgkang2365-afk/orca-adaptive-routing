@@ -955,7 +955,16 @@ class ProductionRunner:
         contract = {
             Phase.INVESTIGATION: "conclusion, evidence, files_checked or tools_used, unresolved_questions",
             Phase.ASSESSMENT: "risks, impact, rollback, write_ready, unresolved_questions",
-            Phase.IMPLEMENTATION: "files_modified, requirements_completed, tests_run, test_results, unexecuted_verification, workspace_diff",
+            Phase.IMPLEMENTATION: (
+                "files_modified, requirements_completed, tests_run, test_results, unexecuted_verification, "
+                "workspace_diff. test_results must use exactly one of two non-mixing forms: (A) a one-entry list "
+                "containing only PASS/PASSED/OK/SUCCESS, status/result/outcome: passed, all tests passed, "
+                "`N passed`, `N passed in Ns`, `N passed, M warnings in Ns`, `Tests: N passed, N total`, or "
+                "`N passed (N)`; or (B) one or more entries all exactly "
+                "`check_name: passed (optional detail)`. For an expected denial or blocked operation, use form B "
+                "and report the check itself as passed with the observed denial in parentheses; do not use free "
+                "prose containing failed"
+            ),
             Phase.VERIFICATION: "verification_outcome (VERIFIED, NOT_VERIFIED, INCONCLUSIVE, TARGET_FAILED), evidence, unresolved_questions",
         }[route.phase]
         packet = json.dumps(evidence.to_dict(), ensure_ascii=False, separators=(",", ":")) if evidence else "{}"
