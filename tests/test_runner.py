@@ -273,6 +273,33 @@ class RunnerContractTests(unittest.TestCase):
         self.assertEqual(adapter.released, ["dispatch_1"])
         self.assertEqual(adapter.read_calls, 1)
 
+    def test_timeout_result_from_adapter_avoids_duplicate_terminal_read(self):
+        result_payload = {
+            "status": "completed", "summary": "policy inspection complete",
+            "conclusion": "scope inspected", "evidence": ["AGENTS.md"],
+            "files_checked": ["AGENTS.md"], "unresolved_questions": [],
+        }
+
+        class SentinelAdapter(FakeAdapter):
+            def wait_for_completion(self, run_id, worker, timeout_ms):
+                return {
+                    "mode": "timeout", "safe_to_read": True,
+                    "result": result_payload,
+                }
+
+            def read_result(self, worker):
+                raise AssertionError("validated timeout result must not be read twice")
+
+        adapter = SentinelAdapter(Path("/home/user/project"))
+        result = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(
+            "Inspect policy files. Do not modify files.", "/home/user/project"
+        )
+
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual(result.phase_list[0].settlement, "coordinator_trusted_relay")
+        self.assertEqual(adapter.relayed, [(Phase.INVESTIGATION, ())])
+        self.assertEqual(adapter.released, ["dispatch_1"])
+
     def test_timeout_without_evidence_fails(self):
         adapter = FakeAdapter(Path("/home/user/project"), modes=["timeout"])
         adapter.read_result = lambda worker: {}

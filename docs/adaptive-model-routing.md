@@ -73,9 +73,12 @@ ceiling; Sol/max is outside v0.2.
 `LIFECYCLE_DONE != TASK_SUCCESS`. `worker_done` only closes the worker lifecycle.
 
 Every dispatched phase attempts `worker_done` exactly once and then ends its
-visible response with one final, single-line
-`ADAPTIVE_RESULT_JSON:<compact JSON object>` marker, regardless of lifecycle
-delivery success. No tool call or prose follows the marker. It is a bounded trusted-relay recovery contract for a
+visible response with one final framed
+`ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON>:END_ADAPTIVE_RESULT`
+marker, regardless of lifecycle delivery success. Padding is optional and
+terminal-inserted whitespace inside the base64url payload is ignored. No tool
+call or prose follows the marker. The legacy `ADAPTIVE_RESULT_JSON:` marker
+remains read-compatible. This is a bounded trusted-relay recovery contract for a
 WSL transport failure; unmarked JSON found in terminal prose is never accepted
 as task evidence. An explicit Orca failure status or visible worker crash takes
 precedence over a success marker.

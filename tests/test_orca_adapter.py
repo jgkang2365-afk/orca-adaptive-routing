@@ -1,3 +1,4 @@
+import base64
 import json
 import subprocess
 import tempfile
@@ -478,7 +479,7 @@ class OrcaAdapterTests(unittest.TestCase):
         self.assertEqual(result["mode"], "worker_done")
         self.assertEqual(result["result"], structured)
 
-    def test_empty_check_exact_idle_allows_early_marker_fallback(self) -> None:
+    def test_false_idle_placeholder_repolls_until_wrapped_framed_result(self) -> None:
         worker = WorkerHandle(
             "task", "dispatch", "owned-terminal", route(Authority.READ_ONLY)
         )
@@ -491,19 +492,28 @@ class OrcaAdapterTests(unittest.TestCase):
             "files_checked": ["AGENTS.md"],
             "unresolved_questions": [],
         }
+        encoded = base64.urlsafe_b64encode(
+            json.dumps(marker, separators=(",", ":")).encode()
+        ).decode().rstrip("=")
+        wrapped = "\n".join(encoded[index:index + 24]
+                            for index in range(0, len(encoded), 24))
+        reads = 0
+        checks = 0
 
         def completed_without_delivery(command):
+            nonlocal checks, reads
             command = list(command)
             if command[1:3] == ["orchestration", "check"]:
+                checks += 1
                 self.runner.commands.append(command)
-                if "--ack" in command:
-                    self.assertEqual(
-                        command[command.index("--ack") + 1], "delivery_empty"
-                    )
+                if checks == 2:
+                    self.assertEqual(command[command.index("--ack") + 1], "delivery_1")
+                elif checks == 3:
+                    self.assertEqual(command[command.index("--ack") + 1], "delivery_2")
                     self.assertIn("--peek", command)
                     return {"messages": []}
                 return {
-                    "deliveryId": "delivery_empty",
+                    "deliveryId": f"delivery_{checks}",
                     "messages": [], "timedOut": True,
                 }
             if command[1:3] == ["terminal", "wait"]:
@@ -514,26 +524,35 @@ class OrcaAdapterTests(unittest.TestCase):
                     "status": "running", "exitCode": None,
                 }}
             if command[1:3] == ["orchestration", "worker-read"]:
+                reads += 1
                 self.runner.commands.append(command)
+                if reads == 1:
+                    return {"terminal": {"tail": [
+                        "Task specification example:",
+                        "ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON, padding optional>",
+                        ":END_ADAPTIVE_RESULT",
+                    ]}}
                 return {"terminal": {"tail": [
-                    "ADAPTIVE_RESULT_JSON:"
-                    + json.dumps(marker, separators=(",", ":"))
+                    "ADAPTIVE_RESULT_B64:" + wrapped + ":END_ADAPTIVE_RESULT"
                 ]}}
             return original(command)
 
         self.adapter.runner = completed_without_delivery
         with patch("adaptive_coordinator.orca.time.monotonic",
-                   side_effect=(0.0, 1.0, 2.0)):
+                   side_effect=(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)), \
+                patch("adaptive_coordinator.orca.time.sleep") as sleep:
             completion = self.adapter.wait_for_completion("run", worker, 240000)
-        raw = self.adapter.read_result(worker)
 
         self.assertEqual(completion["mode"], "timeout")
         self.assertIs(completion["safe_to_read"], True)
-        self.assertEqual(ResultNormalizer.normalize(raw).status, "COMPLETED")
+        self.assertEqual(completion["result"], marker)
+        self.assertEqual(reads, 2)
         self.assertEqual(
             [command[1:3] for command in self.runner.commands],
             [["orchestration", "check"], ["terminal", "wait"],
-             ["orchestration", "check"], ["orchestration", "worker-read"]],
+             ["orchestration", "worker-read"], ["orchestration", "check"],
+             ["terminal", "wait"], ["orchestration", "worker-read"],
+             ["orchestration", "check"]],
         )
         check = self.runner.commands[0]
         probe = self.runner.commands[1]
@@ -541,6 +560,7 @@ class OrcaAdapterTests(unittest.TestCase):
         self.assertEqual(probe[probe.index("--timeout-ms") + 1], "250")
         self.assertNotEqual(check[check.index("--timeout-ms") + 1], "0")
         self.assertNotEqual(probe[probe.index("--timeout-ms") + 1], "0")
+        sleep.assert_called_once_with(self.adapter.LIFECYCLE_CHECK_BACKOFF_SECONDS)
 
     def test_working_probe_repolls_nested_worker_done_then_waits_for_fallback(self) -> None:
         worker = WorkerHandle("task", "dispatch", "owned-terminal", route(Authority.READ_ONLY))
@@ -973,7 +993,8 @@ class OrcaAdapterTests(unittest.TestCase):
         self.adapter.settle_escalation("run", worker, "async dependency")
         self.assertEqual(
             [command[1:3] for command in self.runner.commands],
-            [["orchestration", "worker-stop"], ["orchestration", "task-update"]],
+            [["orchestration", "worker-stop"], ["terminal", "close"],
+             ["orchestration", "task-update"]],
         )
         update = self.runner.commands[-1]
         self.assertEqual(update[update.index("--status") + 1], "failed")
@@ -985,8 +1006,17 @@ class OrcaAdapterTests(unittest.TestCase):
         self.assertEqual(released["state"], "released")
         self.assertEqual(
             [command[1:3] for command in self.runner.commands],
-            [["orchestration", "worker-stop"], ["orchestration", "task-update"],
-             ["orchestration", "worker-release"]],
+            [["orchestration", "worker-stop"], ["terminal", "close"],
+             ["orchestration", "task-update"], ["orchestration", "worker-release"]],
+        )
+
+    def test_successful_stop_closes_owned_terminal_before_trusted_relay_update(self) -> None:
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        self.adapter.trusted_relay("run", worker, "done", files_modified=[])
+        self.assertEqual(
+            [command[1:3] for command in self.runner.commands],
+            [["orchestration", "worker-stop"], ["terminal", "close"],
+             ["orchestration", "task-update"]],
         )
 
     def test_already_settled_fence_is_idempotent_and_task_updates_once(self) -> None:
