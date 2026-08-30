@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from .models import Authority, Route
+from .result_sentinel import final_marked_structured_result
 
 
 class CoordinatorError(RuntimeError):
@@ -425,7 +426,7 @@ class OrcaAdapter:
     def settle_escalation(self, run_id: str, worker: WorkerHandle, finding: str) -> None:
         """Fence the reporting Dispatch before the Coordinator reclassifies it."""
         try:
-            self._fence_and_close_external(worker)
+            self._fence_and_close_owned(worker)
             self.fail_task(run_id, worker.task_id, f"superseded by Coordinator escalation: {finding}")
         except CoordinatorError as exc:
             raise LifecycleSettlementError(f"escalation settlement failed after fencing: {exc}") from exc
@@ -493,16 +494,14 @@ class OrcaAdapter:
         self._closed_terminal_handles.add(terminal_handle)
         return closed
 
-    def _fence_and_close_external(self, worker: WorkerHandle) -> dict[str, Any]:
+    def _fence_and_close_owned(self, worker: WorkerHandle) -> dict[str, Any]:
         stopped = self.fence(worker)
-        if (stopped.get("state") == "stop_unknown"
-                and stopped.get("lastError") == "external terminal"):
-            self._close_terminal_once(worker.terminal_handle)
+        self._close_terminal_once(worker.terminal_handle)
         return stopped
 
     def fail_worker(self, run_id: str, worker: WorkerHandle, reason: str) -> None:
         try:
-            self._fence_and_close_external(worker)
+            self._fence_and_close_owned(worker)
             self.fail_task(run_id, worker.task_id, reason)
         except CoordinatorError as exc:
             raise LifecycleSettlementError(f"failure settlement failed after fencing: {exc}") from exc
@@ -676,12 +675,16 @@ class OrcaAdapter:
                     and readiness.get("satisfied") is True
                     and readiness.get("blockedReason") is None
                 ):
-                    if delivery_to_ack:
-                        acknowledge(delivery_to_ack)
-                    return {
-                        "mode": "timeout", "delivery": delivery,
-                        "safe_to_read": True, "readiness": readiness,
-                    }
+                    candidate = self.read_result(worker)
+                    result, _ = final_marked_structured_result(candidate)
+                    if result is not None:
+                        if delivery_to_ack:
+                            acknowledge(delivery_to_ack)
+                        return {
+                            "mode": "timeout", "delivery": delivery,
+                            "safe_to_read": True, "readiness": readiness,
+                            "result": result,
+                        }
 
             remaining_seconds = deadline - time.monotonic()
             if remaining_seconds <= 0:
@@ -714,7 +717,7 @@ class OrcaAdapter:
         if worker.route.authority is Authority.READ_ONLY and actual_changes:
             raise SafetyGateError("READ-ONLY relay rejected because files were modified")
         try:
-            self._fence_and_close_external(worker)
+            self._fence_and_close_owned(worker)
         except CoordinatorError as exc:
             raise LifecycleSettlementError(f"trusted relay fencing failed: {exc}") from exc
         result = json.dumps(

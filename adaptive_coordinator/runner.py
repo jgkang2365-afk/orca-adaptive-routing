@@ -15,6 +15,7 @@ from .models import (
     LogicalGateState, Phase, Route, RoutingPlan, VerificationMode, VerificationOutcome,
 )
 from .orca import CoordinatorError, LifecycleSettlementError, OrcaAdapter, WorkerHandle
+from .result_sentinel import explicit_orca_failure_status, final_marked_structured_result
 from .routing import SOL, Router, apply_risk_floor, capability_at, capability_rank, next_capability
 
 
@@ -191,90 +192,6 @@ def _strings(value: Any) -> tuple[str, ...]:
     return ()
 
 
-def _terminal_text(payload: Mapping[str, Any], limit: int = 65_536) -> str:
-    chunks: list[str] = []
-    remaining = limit
-
-    def collect(value: Any, key: str = "") -> None:
-        nonlocal remaining
-        if remaining <= 0:
-            return
-        if isinstance(value, Mapping):
-            for child_key, child in value.items():
-                collect(child, str(child_key).lower())
-        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-            for child in value:
-                collect(child, key)
-        elif isinstance(value, str) and key in {
-            "tail", "preview", "output", "finaloutput", "body", "text",
-        }:
-            bounded = value[-remaining:]
-            chunks.append(bounded)
-            remaining -= len(bounded)
-
-    collect(payload)
-    return "\n".join(chunks)
-
-
-def _final_marked_structured_result(
-    payload: Mapping[str, Any], limit: int = 65_536,
-) -> tuple[Mapping[str, Any] | None, str | None]:
-    """Decode the final marker and enforce that it is the visible output boundary."""
-    text = _terminal_text(payload, limit)
-    decoder = json.JSONDecoder()
-    marker = "ADAPTIVE_RESULT_JSON:"
-    marked = text.rfind(marker)
-    if marked < 0:
-        return None, None
-    start = marked + len(marker)
-    while start < len(text) and text[start].isspace():
-        start += 1
-    try:
-        value, end = decoder.raw_decode(text, start)
-    except json.JSONDecodeError:
-        return None, "final ADAPTIVE_RESULT_JSON marker is malformed or truncated"
-    trailing = text[end:]
-    # TUI color/reset/control sequences are ignorable; printable output is not.
-    trailing = re.sub(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))", "", trailing)
-    semantic_failure = (
-        r"\b[1-9][0-9]*\s+(?:tests?\s+)?failed\b", r"\bassertion(?:error| failed| failure)?\b",
-        r"\bworker crashed\b", r"\bfatal error\b", r"\btraceback\b",
-        r"\bprocess exited with code\s+[1-9][0-9]*\b",
-    )
-    transport_noise = (
-        r"transport (?:error|failure):\s*(?:wsl\s+)?vsock(?: endpoint)?\s+(?:unavailable|failed|refused)",
-        r"worker_done delivery (?:failed|failure|error)(?::\s*(?:wsl\s+)?vsock(?: endpoint)?\s+(?:unavailable|failed|refused))?",
-        r"lifecycle transport (?:failed|failure|error)(?::\s*(?:wsl\s+)?vsock(?: endpoint)?\s+(?:unavailable|failed|refused))?",
-        r"(?:failed|unable) to (?:send|deliver) worker_done via (?:wsl\s+)?vsock",
-    )
-    trailing_lines = [line.strip() for line in trailing.splitlines() if line.strip()]
-    if any(any(re.search(pattern, line, flags=re.IGNORECASE) for pattern in semantic_failure)
-           or not any(re.fullmatch(pattern, line, flags=re.IGNORECASE) for pattern in transport_noise)
-           for line in trailing_lines):
-        return None, "substantive output exists after final ADAPTIVE_RESULT_JSON marker"
-    if not (isinstance(value, Mapping) and value.get("status") is not None
-            and any(key in value for key in (
-                "conclusion", "evidence", "files_modified", "tests_run",
-                "verification_outcome", "risks", "write_ready"))):
-        return None, "final ADAPTIVE_RESULT_JSON does not satisfy the worker result contract"
-    return value, None
-
-
-def _explicit_orca_failure_status(payload: Mapping[str, Any]) -> str | None:
-    failed = {"failed", "failure", "error", "blocked", "cancelled", "canceled", "crashed"}
-    for candidate in _messages(payload):
-        value = candidate.get("status")
-        statuses: list[str] = []
-        if isinstance(value, Mapping):
-            statuses.extend(str(item).lower() for item in value.values())
-        elif value is not None:
-            statuses.append(str(value).lower())
-        match = next((status for status in statuses if status in failed), None)
-        if match:
-            return match
-    return None
-
-
 class ResultNormalizer:
     """Accept structured v2, legacy Orca envelopes, then bounded text fallback."""
 
@@ -282,7 +199,7 @@ class ResultNormalizer:
     def normalize(payload: Any) -> NormalizedWorkerResult:
         if not isinstance(payload, Mapping):
             return NormalizedWorkerResult("unknown", _summary(payload))
-        marked_result, marker_error = _final_marked_structured_result(payload)
+        marked_result, marker_error = final_marked_structured_result(payload)
         marked_results = [marked_result] if marked_result is not None else []
         candidates = [*list(_messages(payload)), *marked_results]
         selected = max(candidates, key=lambda item: sum(key in item for key in (
@@ -293,7 +210,7 @@ class ResultNormalizer:
         selected_failed = str(selected_status).lower() in {
             "failed", "failure", "error", "blocked", "cancelled", "canceled", "crashed",
         }
-        explicit_failure = _explicit_orca_failure_status(payload)
+        explicit_failure = explicit_orca_failure_status(payload)
         if marker_error or (explicit_failure and not selected_failed):
             failure = marker_error or f"Orca status {explicit_failure}"
             return NormalizedWorkerResult(
@@ -682,7 +599,7 @@ class ProductionRunner:
                             reason="no safe completion evidence before lifecycle deadline",
                         )
                     else:
-                        raw = completion.get("result") if mode == "worker_done" else None
+                        raw = completion.get("result") if mode in {"worker_done", "timeout"} else None
                         if not isinstance(raw, Mapping) and safe_to_read:
                             try:
                                 raw = adapter.read_result(worker)
@@ -1010,9 +927,10 @@ class ProductionRunner:
                 "Read AGENTS.md. Do only this gate; do not spawn workers. Return a structured result compatible with JSON "
                 f"including status, summary and: {contract}. Evidence packet (bounded): {packet}. "
                 "Report escalation findings to the Coordinator. First attempt worker_done exactly once with the structured result. "
-                "Regardless of whether lifecycle delivery succeeds, then finish with exactly one final visible single-line "
-                "ADAPTIVE_RESULT_JSON:<compact JSON object> containing the same result and no prose after it. "
-                "Do not call any tool after printing that final marker.")
+                "Regardless of whether lifecycle delivery succeeds, then finish with exactly one final visible framed marker "
+                "ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON, padding optional>:END_ADAPTIVE_RESULT "
+                "containing the same result. Whitespace inside the base64url payload is allowed for terminal wrapping. "
+                "Do not emit prose or call any tool after printing that final marker.")
 
     @staticmethod
     def _changed_paths(before: Mapping[str, str], after: Mapping[str, str]) -> list[str]:

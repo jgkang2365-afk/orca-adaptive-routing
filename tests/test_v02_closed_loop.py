@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import unittest
 from dataclasses import replace
@@ -13,6 +14,7 @@ from adaptive_coordinator.routing import (
     CAPABILITY_LADDER, LUNA, SOL, TERRA, Router, capability_at, capability_rank,
     next_capability,
 )
+from adaptive_coordinator.result_sentinel import final_marked_structured_result
 from adaptive_coordinator.runner import (
     DecisionEngine, FailureClassification, FailureClassifier, NormalizedWorkerResult,
     PhaseStatus, ProductionRunner, ResultNormalizer, SuccessEvidenceGate,
@@ -350,6 +352,51 @@ class OrcaGoldenPayloadTests(unittest.TestCase):
                          ("AGENTS.md", "docs/wsl-worker-runtime.md"))
         self.assertTrue(SuccessEvidenceGate.evaluate(route(0), normalized, [])[0])
 
+    def test_wrapped_framed_base64url_result_decodes(self):
+        result = {
+            "status": "completed", "summary": "policy files inspected",
+            "conclusion": "policy is consistent", "evidence": ["AGENTS.md"],
+            "files_checked": ["AGENTS.md"], "unresolved_questions": [],
+        }
+        encoded = base64.urlsafe_b64encode(
+            json.dumps(result, separators=(",", ":")).encode()
+        ).decode().rstrip("=")
+        wrapped = " \n".join(encoded[index:index + 17]
+                              for index in range(0, len(encoded), 17))
+        payload = {"terminal": {"tail": [
+            "ADAPTIVE_RESULT_B64:" + wrapped + ":END_ADAPTIVE_RESULT"
+            "  › Ask Codex to do anything   gpt-5.6-luna low · ~/project",
+            "────────────────────────────────────────────────",
+        ]}}
+
+        decoded, error = final_marked_structured_result(payload)
+        self.assertIsNone(error)
+        self.assertEqual(decoded, result)
+        self.assertEqual(ResultNormalizer.normalize(payload).status, "COMPLETED")
+
+    def test_framed_placeholder_missing_truncated_and_incomplete_contract_never_succeed(self):
+        payloads = (
+            {"terminal": {"tail": [
+                "ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON, padding optional>"
+                ":END_ADAPTIVE_RESULT"
+            ]}},
+            {"terminal": {"tail": ["ADAPTIVE_RESULT_B64:eyJzdGF0dXMi"]}},
+            {"terminal": {"tail": ["ordinary output without a result marker"]}},
+            {"terminal": {"tail": [
+                "ADAPTIVE_RESULT_B64:"
+                + base64.urlsafe_b64encode(b'{"status":"completed"}').decode().rstrip("=")
+                + ":END_ADAPTIVE_RESULT"
+            ]}},
+            {"terminal": {"tail": [
+                "ADAPTIVE_RESULT_B64:" + ("A" * 65_537) + ":END_ADAPTIVE_RESULT"
+            ]}},
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                decoded, _ = final_marked_structured_result(payload)
+                self.assertIsNone(decoded)
+                self.assertNotEqual(ResultNormalizer.normalize(payload).status, "COMPLETED")
+
     def test_unmarked_documentation_json_and_visible_crash_cannot_succeed(self):
         payload = {
             "source": "terminal", "status": {"worker": "running"},
@@ -562,10 +609,12 @@ class ProductionClosedLoopTests(unittest.TestCase):
             result = self.run_with(task, adapter)
             self.assertIs(result.final_status, PhaseStatus.SUCCESS)
             self.assertEqual(len(adapter.routes), expected)
-            self.assertIn("ADAPTIVE_RESULT_JSON:<compact JSON object>", adapter.specs[0])
+            self.assertIn("ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON, padding optional>",
+                          adapter.specs[0])
             self.assertLess(adapter.specs[0].index("First attempt worker_done exactly once"),
-                            adapter.specs[0].index("ADAPTIVE_RESULT_JSON:<compact JSON object>"))
-            self.assertIn("Do not call any tool after printing that final marker", adapter.specs[0])
+                            adapter.specs[0].index("ADAPTIVE_RESULT_B64:"))
+            self.assertIn("Do not emit prose or call any tool after printing that final marker",
+                          adapter.specs[0])
 
     def test_repeated_inconclusive_retries_only_verification_gate(self):
         adapter = ClosedLoopAdapter({"verification": [
