@@ -248,10 +248,20 @@ class RunnerContractTests(unittest.TestCase):
         payload = json.loads(fixture.read_text())["synthetic_worker_read_vsock_marker"]
 
         class ActualTailAdapter(FakeAdapter):
+            read_calls = 0
+
             def wait_for_completion(self, run_id, worker, timeout_ms):
-                return {"mode": "timeout", "delivery": {"messages": []}}
+                return {
+                    "mode": "timeout", "safe_to_read": True,
+                    "readiness": {
+                        "condition": "tui-idle", "satisfied": True,
+                        "blockedReason": None,
+                    },
+                    "delivery": {"messages": []},
+                }
 
             def read_result(self, worker):
+                self.read_calls += 1
                 return payload
 
         adapter = ActualTailAdapter(Path("/home/user/project"))
@@ -261,6 +271,7 @@ class RunnerContractTests(unittest.TestCase):
         self.assertEqual(result.phase_list[0].settlement, "coordinator_trusted_relay")
         self.assertEqual(adapter.relayed, [(Phase.INVESTIGATION, ())])
         self.assertEqual(adapter.released, ["dispatch_1"])
+        self.assertEqual(adapter.read_calls, 1)
 
     def test_timeout_without_evidence_fails(self):
         adapter = FakeAdapter(Path("/home/user/project"), modes=["timeout"])

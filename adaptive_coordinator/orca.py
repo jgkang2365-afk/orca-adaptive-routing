@@ -171,6 +171,8 @@ class OrcaAdapter:
     # worker attempts and not a reason to change model capability.
     WORKER_START_READINESS_DELAYS = (0.25, 0.5, 1.0, 2.0)
     LIFECYCLE_CHECK_BACKOFF_SECONDS = 0.05
+    LIFECYCLE_CHECK_SLICE_MS = 2_000
+    LIFECYCLE_IDLE_PROBE_SLICE_MS = 250
 
     def __init__(
         self,
@@ -186,6 +188,7 @@ class OrcaAdapter:
         self.runner = runner
         self.change_detector = change_detector or (lambda: _git_changes(self.workspace))
         self._pending_lifecycle_messages: list[Mapping[str, Any]] = []
+        self._closed_terminal_handles: set[str] = set()
         self._validate_wsl_workspace()
         self.worktree_selector = worktree_selector or self._resolve_orca_worktree_selector()
 
@@ -422,7 +425,7 @@ class OrcaAdapter:
     def settle_escalation(self, run_id: str, worker: WorkerHandle, finding: str) -> None:
         """Fence the reporting Dispatch before the Coordinator reclassifies it."""
         try:
-            self.fence(worker)
+            self._fence_and_close_external(worker)
             self.fail_task(run_id, worker.task_id, f"superseded by Coordinator escalation: {finding}")
         except CoordinatorError as exc:
             raise LifecycleSettlementError(f"escalation settlement failed after fencing: {exc}") from exc
@@ -452,6 +455,16 @@ class OrcaAdapter:
             )
             if exc.code == "stop_unknown" and external_terminal:
                 return {"state": "stop_unknown", "lastError": "external terminal"}
+            inactive_external = re.fullmatch(
+                rf"(?:dispatch_inactive:\s*)?dispatch "
+                rf"{re.escape(worker.dispatch_id.lower())} cannot stop from stop_unknown\.",
+                message.strip(),
+            )
+            if exc.code == "dispatch_inactive" and inactive_external:
+                # Orca reports this exact state for an inactive Dispatch that
+                # is still backed by the external terminal owned by this
+                # WorkerHandle. The anchored Dispatch identity is mandatory.
+                return {"state": "stop_unknown", "lastError": "external terminal"}
             settled = re.fullmatch(
                 r"(?:stop_unknown:\s*)?(?:"
                 r"no active worker(?:\s+for(?:\s+this)?\s+dispatch)?|"
@@ -464,9 +477,32 @@ class OrcaAdapter:
                 return {"state": "already_settled"}
             raise
 
+    def _close_terminal_once(self, terminal_handle: str) -> dict[str, Any]:
+        if terminal_handle in self._closed_terminal_handles:
+            return {"closed": True, "alreadyClosed": True}
+        closed = self.runner(
+            [
+                self.executable,
+                "terminal",
+                "close",
+                "--terminal",
+                terminal_handle,
+                "--json",
+            ]
+        )
+        self._closed_terminal_handles.add(terminal_handle)
+        return closed
+
+    def _fence_and_close_external(self, worker: WorkerHandle) -> dict[str, Any]:
+        stopped = self.fence(worker)
+        if (stopped.get("state") == "stop_unknown"
+                and stopped.get("lastError") == "external terminal"):
+            self._close_terminal_once(worker.terminal_handle)
+        return stopped
+
     def fail_worker(self, run_id: str, worker: WorkerHandle, reason: str) -> None:
         try:
-            self.fence(worker)
+            self._fence_and_close_external(worker)
             self.fail_task(run_id, worker.task_id, reason)
         except CoordinatorError as exc:
             raise LifecycleSettlementError(f"failure settlement failed after fencing: {exc}") from exc
@@ -489,7 +525,6 @@ class OrcaAdapter:
 
     def wait_for_completion(self, run_id: str, worker: WorkerHandle, timeout_ms: int) -> dict[str, Any]:
         deadline = time.monotonic() + max(timeout_ms, 0) / 1000
-        check_timeout_ms = max(timeout_ms, 0)
         delivery: dict[str, Any] = {}
         delivery_to_ack: str | None = None
 
@@ -585,6 +620,13 @@ class OrcaAdapter:
             return completion_from(pending_match, {"source": "pending_inbox"})
 
         while True:
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                break
+            check_timeout_ms = min(
+                self.LIFECYCLE_CHECK_SLICE_MS,
+                max(1, int(remaining_seconds * 1000)),
+            )
             check_command = [
                 self.executable, "orchestration", "check", "--run", run_id,
             ]
@@ -613,11 +655,38 @@ class OrcaAdapter:
             remaining_seconds = deadline - time.monotonic()
             if remaining_seconds <= 0:
                 break
-            time.sleep(min(self.LIFECYCLE_CHECK_BACKOFF_SECONDS, remaining_seconds))
+            if not messages:
+                probe_timeout_ms = min(
+                    self.LIFECYCLE_IDLE_PROBE_SLICE_MS,
+                    max(1, int(remaining_seconds * 1000)),
+                )
+                probe_response = self.runner(
+                    [
+                        self.executable, "terminal", "wait",
+                        "--terminal", worker.terminal_handle,
+                        "--for", "tui-idle",
+                        "--timeout-ms", str(probe_timeout_ms), "--json",
+                    ]
+                )
+                probe_envelope = probe_response.get("wait")
+                readiness = (dict(probe_envelope)
+                             if isinstance(probe_envelope, Mapping) else probe_response)
+                if (
+                    readiness.get("condition") == "tui-idle"
+                    and readiness.get("satisfied") is True
+                    and readiness.get("blockedReason") is None
+                ):
+                    if delivery_to_ack:
+                        acknowledge(delivery_to_ack)
+                    return {
+                        "mode": "timeout", "delivery": delivery,
+                        "safe_to_read": True, "readiness": readiness,
+                    }
+
             remaining_seconds = deadline - time.monotonic()
             if remaining_seconds <= 0:
                 break
-            check_timeout_ms = max(1, int(remaining_seconds * 1000))
+            time.sleep(min(self.LIFECYCLE_CHECK_BACKOFF_SECONDS, remaining_seconds))
 
         # Orca requires a positive terminal-wait timeout. Once the shared
         # deadline is exhausted there is no safe budget left to prove idle, so
@@ -645,20 +714,9 @@ class OrcaAdapter:
         if worker.route.authority is Authority.READ_ONLY and actual_changes:
             raise SafetyGateError("READ-ONLY relay rejected because files were modified")
         try:
-            stopped = self.fence(worker)
+            self._fence_and_close_external(worker)
         except CoordinatorError as exc:
             raise LifecycleSettlementError(f"trusted relay fencing failed: {exc}") from exc
-        if stopped.get("state") == "stop_unknown" and "external" in stopped.get("lastError", ""):
-            self.runner(
-                [
-                    self.executable,
-                    "terminal",
-                    "close",
-                    "--terminal",
-                    worker.terminal_handle,
-                    "--json",
-                ]
-            )
         result = json.dumps(
             {
                 "summary": summary,
@@ -700,16 +758,7 @@ class OrcaAdapter:
             ]
         )
         if result.get("state") == "retained" and result.get("reason") == "external_terminal":
-            closed = self.runner(
-                [
-                    self.executable,
-                    "terminal",
-                    "close",
-                    "--terminal",
-                    worker.terminal_handle,
-                    "--json",
-                ]
-            )
+            closed = self._close_terminal_once(worker.terminal_handle)
             finalized = self.runner(
                 [
                     self.executable,
