@@ -109,6 +109,34 @@ class RunnerContractTests(unittest.TestCase):
         self.assertEqual([(r.model, r.effort, r.authority) for r in adapter.routes],
                          [(LUNA, "low", Authority.READ_ONLY)])
 
+    def test_structured_worker_done_result_avoids_terminal_fallback_read(self):
+        class LifecycleResultAdapter(FakeAdapter):
+            def wait_for_completion(self, run_id, worker, timeout_ms):
+                return {
+                    "mode": "worker_done",
+                    "message": {"type": "worker_done"},
+                    "result": {
+                        "status": "succeeded",
+                        "summary": "policy inspection complete",
+                        "conclusion": "scope inspected",
+                        "evidence": ["AGENTS.md"],
+                        "files_checked": ["AGENTS.md"],
+                        "unresolved_questions": [],
+                    },
+                }
+
+            def read_result(self, worker):
+                raise AssertionError("structured worker_done must precede terminal fallback")
+
+        adapter = LifecycleResultAdapter(Path("/home/user/project"))
+        result = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(
+            "Inspect Markdown files. Do not modify files.", "/home/user/project"
+        )
+
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual(result.phase_list[0].settlement, "worker_done")
+        self.assertEqual(len(adapter.routes), 1)
+
     def test_b_standard_write(self):
         result, adapter = self.run_task("Implement a small validation helper and unit test.")
         self.assertIs(result.final_status, PhaseStatus.SUCCESS)

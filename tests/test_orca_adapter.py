@@ -12,6 +12,7 @@ from adaptive_coordinator.orca import (
     OrcaAdapter,
     SafetyGateError,
     WorkerHandle,
+    _bounded_json_mapping,
     _parse_orca_output,
     _default_runner,
     _git_changes,
@@ -87,6 +88,11 @@ class OrcaAdapterTests(unittest.TestCase):
             '{"_keepalive":true}\n{"ok":true,"result":{"messages":[]}}\n'
         )
         self.assertTrue(payload["ok"])
+
+    def test_deep_lifecycle_json_is_rejected_without_recursion_failure(self) -> None:
+        deeply_nested = '{"x":' * 10_000 + "0" + "}" * 10_000
+        self.assertLess(len(deeply_nested.encode()), 65_536)
+        self.assertIsNone(_bounded_json_mapping(deeply_nested))
 
     def test_workspace_write_is_explicit_and_non_interactive(self) -> None:
         command = self.adapter.codex_command(route(Authority.WORKSPACE_WRITE))
@@ -406,15 +412,69 @@ class OrcaAdapterTests(unittest.TestCase):
     def test_normal_worker_done_is_collected(self) -> None:
         worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
         original = self.adapter.runner
+        structured = {
+            "status": "succeeded",
+            "summary": "inspection complete",
+            "conclusion": "policy is consistent",
+            "evidence": ["AGENTS.md"],
+            "files_checked": ["AGENTS.md"],
+            "unresolved_questions": [],
+        }
 
         def delivery(command):
             if command[1:3] == ["orchestration", "check"]:
-                return {"messages": [{"type": "worker_done", "dispatchId": "dispatch"}]}
+                return {"messages": [{
+                    "type": "worker_done",
+                    "body": json.dumps(structured),
+                    "payload": json.dumps({
+                        "taskId": "task", "dispatchId": "dispatch",
+                        "outcome": "succeeded",
+                    }),
+                }]}
             return original(command)
 
         self.adapter.runner = delivery
         result = self.adapter.wait_for_completion("run", worker, 1000)
         self.assertEqual(result["mode"], "worker_done")
+        self.assertEqual(result["result"], structured)
+
+    def test_worker_done_identity_mismatch_or_malformed_payload_is_ignored(self) -> None:
+        worker = WorkerHandle("task", "dispatch", "owned-terminal", route(Authority.READ_ONLY))
+        messages = (
+            {"type": "worker_done", "dispatchId": "other",
+             "payload": json.dumps({"taskId": "task", "dispatchId": "dispatch"})},
+            {"type": "worker_done", "payload": "{malformed"},
+            {"type": "worker_done", "payload": json.dumps({
+                "taskId": "other-task", "dispatchId": "dispatch",
+            })},
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                runner = FakeRunner()
+                adapter = OrcaAdapter(
+                    "/home/user/projects/test", runner=runner,
+                    worktree_selector="path:test", change_detector=lambda: {},
+                )
+                original = adapter.runner
+
+                def mismatched(command, *, _message=message):
+                    command = list(command)
+                    if command[1:3] == ["orchestration", "check"]:
+                        runner.commands.append(command)
+                        return {"messages": [_message]}
+                    if command[1:3] == ["terminal", "wait"]:
+                        runner.commands.append(command)
+                        return {"wait": {
+                            "condition": "tui-idle", "satisfied": False,
+                            "status": "timeout", "blockedReason": None,
+                        }}
+                    return original(command)
+
+                adapter.runner = mismatched
+                with self.assertRaises(CoordinatorError) as raised:
+                    adapter.wait_for_completion("run", worker, 0)
+                self.assertEqual(raised.exception.code, "agent_readiness_blocked")
 
     def test_timeout_waits_for_owned_terminal_idle_before_complete_marker_read(self) -> None:
         worker = WorkerHandle("task", "dispatch", "owned-terminal", route(Authority.READ_ONLY))

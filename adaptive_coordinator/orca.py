@@ -36,6 +36,18 @@ Runner = Callable[[Sequence[str]], dict[str, Any]]
 ChangeDetector = Callable[[], Mapping[str, str]]
 
 
+def _bounded_json_mapping(value: Any, limit: int = 65_536) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping):
+        return value
+    if not isinstance(value, str) or len(value.encode(errors="replace")) > limit:
+        return None
+    try:
+        decoded = json.loads(value)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    return decoded if isinstance(decoded, Mapping) else None
+
+
 def _parse_orca_output(output: str) -> dict[str, Any]:
     decoder = json.JSONDecoder()
     cursor = 0
@@ -489,12 +501,36 @@ class OrcaAdapter:
         messages = delivery.get("messages") or delivery.get("delivery", {}).get("messages") or []
         for message in messages:
             kind = message.get("type") or message.get("message_type")
-            dispatch_id = message.get("dispatch_id") or message.get("dispatchId")
-            if kind == "worker_done" and dispatch_id == worker.dispatch_id:
-                return {"mode": "worker_done", "message": message, "delivery": delivery}
-            if kind == "escalation" and dispatch_id == worker.dispatch_id:
+            embedded = _bounded_json_mapping(message.get("payload")) or {}
+            dispatch_ids = tuple(
+                str(value) for value in (
+                    message.get("dispatch_id"), message.get("dispatchId"),
+                    embedded.get("dispatch_id"), embedded.get("dispatchId"),
+                ) if value is not None
+            )
+            task_ids = tuple(
+                str(value) for value in (
+                    message.get("task_id"), message.get("taskId"),
+                    embedded.get("task_id"), embedded.get("taskId"),
+                ) if value is not None
+            )
+            # Contradictory or absent identity evidence never settles a worker.
+            identity_matches = (
+                bool(dispatch_ids)
+                and all(value == worker.dispatch_id for value in dispatch_ids)
+                and all(value == worker.task_id for value in task_ids)
+            )
+            if not identity_matches:
+                continue
+            if kind == "worker_done":
+                structured = _bounded_json_mapping(message.get("body"))
+                return {
+                    "mode": "worker_done", "message": message,
+                    "result": structured, "delivery": delivery,
+                }
+            if kind == "escalation":
                 return {"mode": "escalation", "message": message, "delivery": delivery}
-            if kind == "question" and dispatch_id == worker.dispatch_id:
+            if kind == "question":
                 return {"mode": "question", "message": message, "delivery": delivery}
         # A lifecycle timeout is not evidence that the worker stopped writing
         # its visible result.  Spend only the remainder of the original
