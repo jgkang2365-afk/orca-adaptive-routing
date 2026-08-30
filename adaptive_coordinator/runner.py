@@ -670,13 +670,15 @@ class ProductionRunner:
                         "BLOCKED", question, reason="worker question requires resolution",
                         needs_user_input=True, evidence=(question,))
                 else:
-                    try:
-                        raw = adapter.read_result(worker)
-                    except Exception as exc:
-                        if lifecycle_settled:
-                            raise LifecycleSettlementError(
-                                f"result read failed after lifecycle settlement: {exc}") from exc
-                        raise
+                    raw = completion.get("result") if mode == "worker_done" else None
+                    if not isinstance(raw, Mapping):
+                        try:
+                            raw = adapter.read_result(worker)
+                        except Exception as exc:
+                            if lifecycle_settled:
+                                raise LifecycleSettlementError(
+                                    f"result read failed after lifecycle settlement: {exc}") from exc
+                            raise
                     normalized = ResultNormalizer.normalize(raw)
                 if (route.authority is Authority.WORKSPACE_WRITE
                         and self._non_idempotent_intent(task)
