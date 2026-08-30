@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import unittest
+import zlib
 from dataclasses import replace
 from pathlib import Path
 
@@ -374,6 +375,36 @@ class OrcaGoldenPayloadTests(unittest.TestCase):
         self.assertEqual(decoded, result)
         self.assertEqual(ResultNormalizer.normalize(payload).status, "COMPLETED")
 
+    def test_gzip_base64url_preserves_multifile_evidence_and_bounds_inflation(self):
+        paths = [f"adaptive_coordinator/module_{index}.py" for index in range(12)]
+        result = {
+            "status": "completed", "summary": "implementation completed and verified",
+            "files_modified": paths, "requirements_completed": ["bounded evidence"],
+            "tests_run": ["unit"], "test_results": ["PASS"],
+            "unexecuted_verification": [], "workspace_diff": paths,
+        }
+        compressor = zlib.compressobj(wbits=31)
+        compressed = compressor.compress(json.dumps(result, separators=(",", ":")).encode()) + compressor.flush()
+        encoded = base64.urlsafe_b64encode(compressed).decode().rstrip("=")
+        wrapped = " \n".join(encoded[index:index + 29] for index in range(0, len(encoded), 29))
+        payload = {"terminal": {"tail": [
+            "ADAPTIVE_RESULT_GZ64:" + wrapped + ":END_ADAPTIVE_RESULT"
+        ]}}
+
+        decoded, error = final_marked_structured_result(payload)
+        self.assertIsNone(error)
+        self.assertEqual(decoded, result)
+        self.assertLess(len(encoded), len(base64.urlsafe_b64encode(json.dumps(result).encode())))
+
+        compressor = zlib.compressobj(wbits=31)
+        bomb = compressor.compress(b"A" * 65_537) + compressor.flush()
+        encoded_bomb = base64.urlsafe_b64encode(bomb).decode().rstrip("=")
+        decoded, error = final_marked_structured_result({"terminal": {"tail": [
+            "ADAPTIVE_RESULT_GZ64:" + encoded_bomb + ":END_ADAPTIVE_RESULT"
+        ]}})
+        self.assertIsNone(decoded)
+        self.assertIn("bounded result limit", error)
+
     def test_framed_placeholder_missing_truncated_and_incomplete_contract_never_succeed(self):
         payloads = (
             {"terminal": {"tail": [
@@ -614,23 +645,21 @@ class ProductionClosedLoopTests(unittest.TestCase):
                 "Construct one complete result object first",
                 "The summary string itself must be exactly three sentences",
                 "do not echo it as an output field",
-                "complete compact JSON must be at most 768 UTF-8 bytes",
                 "Serialize the complete object as compact UTF-8 JSON and keep it in memory",
-                "Before lifecycle delivery, prepare the base64url representation",
+                "Before lifecycle delivery, prepare a gzip-compressed base64url representation",
                 "Do not create a temporary file or write anywhere",
                 "Keep the exact three-sentence summary in a separate variable",
                 "Your final tool call must be one shell compound command",
                 "attempt worker_done exactly once with --body equal to the three-sentence summary",
                 "regardless of its exit status print exactly one final visible framed marker",
-                "ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON, padding optional>",
+                "ADAPTIVE_RESULT_GZ64:<base64url gzip-compressed compact UTF-8 JSON, padding optional>",
                 "Make the marker the final command output",
             )
             positions = [spec.index(fragment) for fragment in ordered]
             self.assertEqual(positions, sorted(positions))
             self.assertIn("Never call worker_done twice", spec)
             self.assertIn("encoding the same compact JSON object", spec)
-            self.assertIn("shorten values without dropping required keys", spec)
-            self.assertIn("terminal evidence is never folded or elided by the TUI", spec)
+            self.assertIn("gzip -n -c", spec)
             self.assertIn("READ-ONLY workers cannot write to /tmp or the workspace", spec)
             self.assertIn("durable terminal evidence for the Coordinator", spec)
             self.assertIn("it is not a second lifecycle message", spec)
