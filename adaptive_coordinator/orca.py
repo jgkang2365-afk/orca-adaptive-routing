@@ -236,6 +236,66 @@ class OrcaAdapter:
         )
         return result["task"]["id"]
 
+    def _wait_for_tui_idle(
+        self,
+        terminal_handle: str,
+        timeout_ms: int,
+        *,
+        allow_update_skip: bool,
+    ) -> dict[str, Any]:
+        def wait() -> dict[str, Any]:
+            return self.runner(
+                [
+                    self.executable,
+                    "terminal",
+                    "wait",
+                    "--terminal",
+                    terminal_handle,
+                    "--for",
+                    "tui-idle",
+                    "--timeout-ms",
+                    str(timeout_ms),
+                    "--json",
+                ]
+            )
+
+        wait_response = wait()
+        wait_envelope = wait_response.get("wait")
+        readiness = dict(wait_envelope) if isinstance(wait_envelope, Mapping) else wait_response
+        blocked_reason = readiness.get("blockedReason")
+        if blocked_reason == "codex-update-prompt" and allow_update_skip:
+            # Keep the installed Codex snapshot unchanged. Option 2 is the
+            # prompt's explicit Skip action; option 1 (Update) is never sent.
+            self.runner(
+                [
+                    self.executable,
+                    "terminal",
+                    "send",
+                    "--terminal",
+                    terminal_handle,
+                    "--text",
+                    "2",
+                    "--enter",
+                    "--json",
+                ]
+            )
+            wait_response = wait()
+            wait_envelope = wait_response.get("wait")
+            readiness = dict(wait_envelope) if isinstance(wait_envelope, Mapping) else wait_response
+            blocked_reason = readiness.get("blockedReason")
+
+        if (
+            readiness.get("condition") != "tui-idle"
+            or readiness.get("satisfied") is not True
+            or blocked_reason
+        ):
+            reason = blocked_reason or "invalid-tui-idle-readiness"
+            raise CoordinatorError(
+                f"agent terminal readiness blocked: {reason}",
+                code="agent_readiness_blocked",
+            )
+        return readiness
+
     def start_worker(
         self,
         run_id: str,
@@ -264,19 +324,10 @@ class OrcaAdapter:
         )
         terminal_handle = terminal["terminal"]["handle"]
         try:
-            self.runner(
-                [
-                    self.executable,
-                    "terminal",
-                    "wait",
-                    "--terminal",
-                    terminal_handle,
-                    "--for",
-                    "tui-idle",
-                    "--timeout-ms",
-                    "60000",
-                    "--json",
-                ]
+            self._wait_for_tui_idle(
+                terminal_handle,
+                60000,
+                allow_update_skip=True,
             )
             worker_start = [
                 self.executable,
@@ -302,19 +353,10 @@ class OrcaAdapter:
                     time.sleep(self.WORKER_START_READINESS_DELAYS[attempt])
                     # Reconfirm that the same terminal is idle before asking
                     # Orca to bind it again. No second terminal is created.
-                    self.runner(
-                        [
-                            self.executable,
-                            "terminal",
-                            "wait",
-                            "--terminal",
-                            terminal_handle,
-                            "--for",
-                            "tui-idle",
-                            "--timeout-ms",
-                            "10000",
-                            "--json",
-                        ]
+                    self._wait_for_tui_idle(
+                        terminal_handle,
+                        10000,
+                        allow_update_skip=False,
                     )
         except Exception as start_error:
             try:
