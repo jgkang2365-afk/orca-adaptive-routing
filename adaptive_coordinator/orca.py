@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import platform
+import re
 import shlex
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,10 +16,18 @@ from .models import Authority, Route
 
 
 class CoordinatorError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        self.code = code
+        super().__init__(f"{code}: {message}" if code else message)
 
 
 class SafetyGateError(CoordinatorError):
+    pass
+
+
+class LifecycleSettlementError(CoordinatorError):
+    """A fenced worker could not be settled; this is never a model failure."""
+
     pass
 
 
@@ -52,26 +63,81 @@ def _default_runner(command: Sequence[str]) -> dict[str, Any]:
         raise CoordinatorError("Orca did not return JSON") from exc
     if not payload.get("ok", False):
         error = payload.get("error", {})
-        raise CoordinatorError(error.get("message", "Orca command failed"))
+        raise CoordinatorError(error.get("message", "Orca command failed"), code=error.get("code"))
     return payload["result"]
 
 
 def _git_changes(workspace: Path) -> Mapping[str, str]:
-    completed = subprocess.run(
-        ["git", "-C", str(workspace), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-        check=True,
-        capture_output=True,
-    )
-    result: dict[str, str] = {}
-    for raw_path in completed.stdout.split(b"\0"):
-        if not raw_path:
+    index_output = subprocess.run(
+        ["git", "-C", str(workspace), "ls-files", "--stage", "-z"],
+        check=True, capture_output=True,
+    ).stdout
+    status_output = subprocess.run(
+        ["git", "-C", str(workspace), "status", "--porcelain=v2", "-z", "--untracked-files=all"],
+        check=True, capture_output=True,
+    ).stdout
+
+    index: dict[str, list[str]] = {}
+    for record in index_output.split(b"\0"):
+        if not record or b"\t" not in record:
             continue
-        path = raw_path.decode()
-        target = workspace / path
-        if target.is_file():
-            result[path] = hashlib.sha256(target.read_bytes()).hexdigest()
+        metadata, raw_path = record.split(b"\t", 1)
+        path = raw_path.decode(errors="surrogateescape")
+        index.setdefault(path, []).append(metadata.decode(errors="replace"))
+
+    status_by_path: dict[str, str] = {}
+    records = status_output.split(b"\0")
+    cursor = 0
+    while cursor < len(records):
+        record = records[cursor]
+        cursor += 1
+        if not record:
+            continue
+        kind = record[:1]
+        maxsplit = {b"1": 8, b"2": 9, b"u": 10}.get(kind)
+        if maxsplit is not None:
+            parts = record.split(b" ", maxsplit)
+            if len(parts) <= maxsplit:
+                continue
+            raw_path = parts[maxsplit]
+            signature = record
+            if kind == b"2" and cursor < len(records):
+                signature += b"\0" + records[cursor]
+                cursor += 1
+        elif kind in {b"?", b"!"} and record[1:2] == b" ":
+            raw_path = record[2:]
+            signature = record
         else:
-            result[path] = "<missing>"
+            continue
+        status_by_path[raw_path.decode(errors="surrogateescape")] = hashlib.sha256(signature).hexdigest()
+
+    result: dict[str, str] = {}
+    for path in sorted(set(index) | set(status_by_path)):
+        target = workspace / path
+        try:
+            metadata = target.lstat()
+        except FileNotFoundError:
+            worktree = "missing"
+        else:
+            if stat.S_ISREG(metadata.st_mode):
+                digest = hashlib.sha256(target.read_bytes()).hexdigest()
+                git_mode = "100755" if metadata.st_mode & stat.S_IXUSR else "100644"
+                worktree = f"file:{git_mode}:{digest}"
+            elif stat.S_ISLNK(metadata.st_mode):
+                digest = hashlib.sha256(os.readlink(target).encode(errors="surrogateescape")).hexdigest()
+                worktree = f"symlink:120000:{digest}"
+            elif stat.S_ISDIR(metadata.st_mode):
+                worktree = "directory:160000"
+            else:
+                worktree = f"other:{stat.S_IFMT(metadata.st_mode):o}"
+        fingerprint = {
+            "index": sorted(index.get(path, [])),
+            "status": status_by_path.get(path),
+            "worktree": worktree,
+        }
+        result[path] = hashlib.sha256(
+            json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
     return result
 
 
@@ -257,17 +323,55 @@ class OrcaAdapter:
 
     def settle_escalation(self, run_id: str, worker: WorkerHandle, finding: str) -> None:
         """Fence the reporting Dispatch before the Coordinator reclassifies it."""
-        self.runner(
-            [
-                self.executable,
-                "orchestration",
-                "worker-stop",
-                "--dispatch",
-                worker.dispatch_id,
-                "--json",
-            ]
-        )
-        self.fail_task(run_id, worker.task_id, f"superseded by Coordinator escalation: {finding}")
+        try:
+            self.fence(worker)
+            self.fail_task(run_id, worker.task_id, f"superseded by Coordinator escalation: {finding}")
+        except CoordinatorError as exc:
+            raise LifecycleSettlementError(f"escalation settlement failed after fencing: {exc}") from exc
+
+    def fence(self, worker: WorkerHandle) -> dict[str, Any]:
+        """Stop a Dispatch before its Task is updated or its terminal released."""
+        try:
+            return self.runner(
+                [
+                    self.executable,
+                    "orchestration",
+                    "worker-stop",
+                    "--dispatch",
+                    worker.dispatch_id,
+                    "--json",
+                ]
+            )
+        except CoordinatorError as exc:
+            message = str(exc).lower()
+            external_terminal = re.fullmatch(
+                r"(?:stop_unknown:\s*)?(?:"
+                r"external terminal|"
+                r"worker (?:uses|is (?:attached to|backed by)) an? external terminal|"
+                r"dispatch uses an? external terminal"
+                r")(?:[.!]|: [^\n]+)?",
+                message.strip(),
+            )
+            if exc.code == "stop_unknown" and external_terminal:
+                return {"state": "stop_unknown", "lastError": "external terminal"}
+            settled = re.fullmatch(
+                r"(?:stop_unknown:\s*)?(?:"
+                r"no active worker(?:\s+for(?:\s+this)?\s+dispatch)?|"
+                r"worker (?:is )?already (?:settled|stopped|completed)|"
+                r"dispatch ctx_[a-z0-9]+ (?:is )?(?:already )?(?:settled|stopped|completed)"
+                r")[.!]?",
+                message.strip(),
+            )
+            if exc.code == "stop_unknown" and settled:
+                return {"state": "already_settled"}
+            raise
+
+    def fail_worker(self, run_id: str, worker: WorkerHandle, reason: str) -> None:
+        try:
+            self.fence(worker)
+            self.fail_task(run_id, worker.task_id, reason)
+        except CoordinatorError as exc:
+            raise LifecycleSettlementError(f"failure settlement failed after fencing: {exc}") from exc
 
     def read_result(self, worker: WorkerHandle, limit: int = 200) -> dict[str, Any]:
         return self.runner(
@@ -332,20 +436,9 @@ class OrcaAdapter:
         if worker.route.authority is Authority.READ_ONLY and actual_changes:
             raise SafetyGateError("READ-ONLY relay rejected because files were modified")
         try:
-            stopped = self.runner(
-                [
-                    self.executable,
-                    "orchestration",
-                    "worker-stop",
-                    "--dispatch",
-                    worker.dispatch_id,
-                    "--json",
-                ]
-            )
+            stopped = self.fence(worker)
         except CoordinatorError as exc:
-            if "stop_unknown" not in str(exc):
-                raise
-            stopped = {"state": "stop_unknown", "lastError": "external terminal"}
+            raise LifecycleSettlementError(f"trusted relay fencing failed: {exc}") from exc
         if stopped.get("state") == "stop_unknown" and "external" in stopped.get("lastError", ""):
             self.runner(
                 [
@@ -366,22 +459,25 @@ class OrcaAdapter:
             },
             separators=(",", ":"),
         )
-        self.runner(
-            [
-                self.executable,
-                "orchestration",
-                "task-update",
-                "--run",
-                run_id,
-                "--id",
-                worker.task_id,
-                "--status",
-                "completed",
-                "--result",
-                result,
-                "--json",
-            ]
-        )
+        try:
+            self.runner(
+                [
+                    self.executable,
+                    "orchestration",
+                    "task-update",
+                    "--run",
+                    run_id,
+                    "--id",
+                    worker.task_id,
+                    "--status",
+                    "completed",
+                    "--result",
+                    result,
+                    "--json",
+                ]
+            )
+        except CoordinatorError as exc:
+            raise LifecycleSettlementError(f"trusted relay task settlement failed: {exc}") from exc
 
     def release(self, worker: WorkerHandle) -> dict[str, Any]:
         result = self.runner(

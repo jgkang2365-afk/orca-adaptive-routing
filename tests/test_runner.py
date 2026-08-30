@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import unittest
 from dataclasses import replace
 from pathlib import Path
 
 from adaptive_coordinator.models import Authority, Phase
-from adaptive_coordinator.orca import WorkerHandle
+from adaptive_coordinator.orca import LifecycleSettlementError, WorkerHandle
 from adaptive_coordinator.runner import PhaseStatus, ProductionRunner, _summary
 from adaptive_coordinator.routing import LUNA, SOL, TERRA, Router
 
@@ -194,6 +195,25 @@ class RunnerContractTests(unittest.TestCase):
         self.assertEqual(adapter.relayed, [(Phase.INVESTIGATION, ())])
         self.assertEqual(result.phase_list[0].settlement, "coordinator_trusted_relay")
 
+    def test_marked_worker_read_vsock_tail_uses_trusted_relay_and_releases(self):
+        fixture = (Path(__file__).parent / "fixtures" / "orca_payloads_v02.json")
+        payload = json.loads(fixture.read_text())["synthetic_worker_read_vsock_marker"]
+
+        class ActualTailAdapter(FakeAdapter):
+            def wait_for_completion(self, run_id, worker, timeout_ms):
+                return {"mode": "timeout", "delivery": {"messages": []}}
+
+            def read_result(self, worker):
+                return payload
+
+        adapter = ActualTailAdapter(Path("/home/user/project"))
+        result = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(
+            "Inspect policy files. Do not modify files.", "/home/user/project")
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual(result.phase_list[0].settlement, "coordinator_trusted_relay")
+        self.assertEqual(adapter.relayed, [(Phase.INVESTIGATION, ())])
+        self.assertEqual(adapter.released, ["dispatch_1"])
+
     def test_timeout_without_evidence_fails(self):
         adapter = FakeAdapter(Path("/home/user/project"), modes=["timeout"])
         adapter.read_result = lambda worker: {}
@@ -232,6 +252,142 @@ class RunnerContractTests(unittest.TestCase):
         self.assertEqual(len(adapter.failed), 1)
         self.assertEqual(adapter.failed[0][0], "task_1")
         self.assertIn("ORCHESTRATION_FAILURE", adapter.failed[0][1])
+
+    def test_active_dispatch_is_fenced_before_failure_update_and_release(self):
+        class ActiveDispatchAdapter(FakeAdapter):
+            def __init__(self, workspace):
+                super().__init__(workspace, failures={"investigation": "permission denied"})
+                self.active = set()
+                self.events = []
+
+            def start_worker(self, *args, **kwargs):
+                worker = super().start_worker(*args, **kwargs)
+                self.active.add(worker.dispatch_id)
+                return worker
+
+            def fail_task(self, run_id, task_id, reason):
+                self.assert_no_active_dispatch()
+                self.events.append("task-update")
+                super().fail_task(run_id, task_id, reason)
+
+            def assert_no_active_dispatch(self):
+                if self.active:
+                    raise AssertionError("task updated while Dispatch is active")
+
+            def fail_worker(self, run_id, worker, reason):
+                self.events.append("worker-stop")
+                self.active.discard(worker.dispatch_id)
+                self.fail_task(run_id, worker.task_id, reason)
+
+            def release(self, worker):
+                self.assert_no_active_dispatch()
+                self.events.append("worker-release")
+                return super().release(worker)
+
+        adapter = ActiveDispatchAdapter(Path("/home/user/project"))
+        result = ProductionRunner(adapter_factory=lambda _: adapter).run(
+            "Inspect project metadata.", "/home/user/project")
+        self.assertIs(result.final_status, PhaseStatus.BLOCKED)
+        self.assertEqual(adapter.events, ["worker-stop", "task-update", "worker-release"])
+
+    def test_already_fenced_failure_settlement_error_is_terminal_without_retry(self):
+        class SettlementFailureAdapter(FakeAdapter):
+            def __init__(self, workspace):
+                super().__init__(workspace, failures={"investigation": "permission denied"})
+                self.failure_settlements = 0
+
+            def fail_task(self, run_id, task_id, reason):
+                self.failure_settlements += 1
+                raise LifecycleSettlementError("task update failed after already-settled worker_done")
+
+        adapter = SettlementFailureAdapter(Path("/home/user/project"))
+        result = ProductionRunner(adapter_factory=lambda _: adapter).run(
+            "Inspect project metadata.", "/home/user/project")
+        self.assertIs(result.final_status, PhaseStatus.FAILED)
+        self.assertEqual(len(adapter.routes), 1)
+        self.assertEqual(adapter.failure_settlements, 1)
+        self.assertEqual(adapter.released, ["dispatch_1"])
+        self.assertEqual(result.adaptive_decisions[-1]["decision"], "TERMINAL")
+
+    def test_escalation_task_update_failure_is_terminal_without_refence_or_retry(self):
+        class EscalationSettlementFailureAdapter(FakeAdapter):
+            def __init__(self, workspace):
+                super().__init__(workspace, modes=["escalation"])
+                self.settlement_calls = 0
+
+            def settle_escalation(self, run_id, worker, finding):
+                self.settlement_calls += 1
+                raise LifecycleSettlementError("task update failed after escalation fence")
+
+        adapter = EscalationSettlementFailureAdapter(Path("/home/user/project"))
+        result = ProductionRunner(adapter_factory=lambda _: adapter).run(
+            "Inspect async integration metadata.", "/home/user/project")
+        self.assertIs(result.final_status, PhaseStatus.FAILED)
+        self.assertEqual(len(adapter.routes), 1)
+        self.assertEqual(adapter.settlement_calls, 1)
+        self.assertEqual(adapter.released, ["dispatch_1"])
+
+    def test_settled_escalation_uses_captured_finding_without_reading_old_worker(self):
+        class SettledEscalationAdapter(FakeAdapter):
+            def __init__(self, workspace):
+                super().__init__(workspace, modes=["escalation"])
+                self.read_calls = 0
+
+            def read_result(self, worker):
+                self.read_calls += 1
+                if worker.dispatch_id == "dispatch_1":
+                    raise RuntimeError("settled worker result unavailable")
+                return super().read_result(worker)
+
+        adapter = SettledEscalationAdapter(Path("/home/user/project"))
+        result = ProductionRunner(adapter_factory=lambda _: adapter).run(
+            "Inspect async integration metadata.", "/home/user/project")
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual(adapter.read_calls, 1)  # only the newly routed worker is read
+        self.assertEqual(len(adapter.settled_escalations), 1)
+
+    def test_question_blocks_without_read_retry_or_dispatch_multiplication(self):
+        class QuestionAdapter(FakeAdapter):
+            def __init__(self, workspace):
+                super().__init__(workspace, modes=["question"])
+                self.read_calls = 0
+                self.failure_settlements = 0
+
+            def read_result(self, worker):
+                self.read_calls += 1
+                raise RuntimeError("question result unavailable")
+
+            def fail_worker(self, run_id, worker, reason):
+                self.failure_settlements += 1
+                self.fail_task(run_id, worker.task_id, reason)
+
+        adapter = QuestionAdapter(Path("/home/user/project"))
+        result = ProductionRunner(adapter_factory=lambda _: adapter).run(
+            "Inspect project metadata.", "/home/user/project")
+        self.assertIs(result.final_status, PhaseStatus.BLOCKED)
+        self.assertEqual(len(adapter.routes), 1)
+        self.assertEqual(adapter.read_calls, 0)
+        self.assertEqual(adapter.failure_settlements, 1)
+
+    def test_settled_write_read_failure_preserves_partial_diff_and_never_retries(self):
+        class PartialWriteAdapter(FakeAdapter):
+            def __init__(self, workspace):
+                super().__init__(workspace)
+                self.changes = {}
+                self.change_detector = lambda: dict(self.changes)
+
+            def read_result(self, worker):
+                self.changes["a.py"] = "partial"
+                raise RuntimeError("settled worker result unavailable")
+
+        adapter = PartialWriteAdapter(Path("/home/user/project"))
+        result = ProductionRunner(adapter_factory=lambda _: adapter).run(
+            "Implement the validation fix.", "/home/user/project")
+        self.assertIs(result.final_status, PhaseStatus.FAILED)
+        self.assertEqual(len(adapter.routes), 1)
+        self.assertEqual(result.logical_gates["implementation-1"].attempts[0].files_changed,
+                         ("a.py",))
+        self.assertEqual(adapter.released, ["dispatch_1"])
 
     def test_worker_summary_is_bounded_and_does_not_dump_full_transcript(self):
         payload = {

@@ -2,11 +2,22 @@
   "_provenance": {
     "actual_sanitized_captures": ["actual_worker_show", "actual_dispatch_not_found"],
     "capture_command": "orca-ide orchestration worker-show --dispatch <redacted> --json",
-    "deterministic_synthetic_edge_cases": ["worker_done", "escalation", "question", "timeout_valid_evidence", "timeout_no_evidence", "permission_denied", "plan_limitation", "worker_placement_failure", "cleanup_failure"],
-    "note": "Synthetic cases exercise parser state transitions; they are not represented as production captures."
+    "deterministic_synthetic_edge_cases": ["worker_done", "escalation", "question", "timeout_valid_evidence", "timeout_no_evidence", "permission_denied", "plan_limitation", "worker_placement_failure", "cleanup_failure", "synthetic_worker_read_vsock_marker"],
+    "note": "The marker fixture is synthetic until a post-install pilot captures it. The prior real worker-read collapsed the command body and did not expose recoverable JSON."
   },
   "actual_worker_show": {"ok": true, "result": {"dispatch": {"status": "completed"}, "worker": {"state": "succeeded", "stage": "settled", "residualResources": []}, "terminal": null, "terminalResource": {"releaseState": "released"}}},
   "actual_dispatch_not_found": {"ok": false, "error": {"code": "dispatch_not_found"}},
+  "synthetic_worker_read_vsock_marker": {
+    "source": "terminal",
+    "status": {"worker": "running", "dispatch": "ready"},
+    "terminal": {
+      "preview": "worker finished; lifecycle relay command failed",
+      "tail": [
+        "ADAPTIVE_RESULT_JSON:{\"status\":\"completed\",\"summary\":\"policy files inspected\",\"conclusion\":\"AGENTS.md and runtime policy are consistent\",\"evidence\":[\"AGENTS.md\",\"docs/wsl-worker-runtime.md\"],\"files_checked\":[\"AGENTS.md\",\"docs/wsl-worker-runtime.md\"],\"unresolved_questions\":[]}",
+        "transport error: WSL vsock endpoint unavailable"
+      ]
+    }
+  },
   "worker_done": {"messages": [{"type": "worker_done", "dispatchId": "dispatch_fixture", "status": "completed"}]},
   "escalation": {"messages": [{"type": "escalation", "dispatchId": "dispatch_fixture", "body": "reasoning confidence insufficient"}]},
   "question": {"messages": [{"type": "question", "dispatchId": "dispatch_fixture", "body": "User approval is required"}]},

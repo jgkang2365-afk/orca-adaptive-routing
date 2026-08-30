@@ -334,12 +334,108 @@ class OrcaGoldenPayloadTests(unittest.TestCase):
     def test_sanitized_fixture_contract_is_complete(self):
         self.assertEqual(set(self.payloads) - {"_provenance", "actual_worker_show", "actual_dispatch_not_found"}, {"worker_done", "escalation", "question",
             "timeout_valid_evidence", "timeout_no_evidence", "permission_denied", "plan_limitation",
-            "worker_placement_failure", "cleanup_failure"})
+            "worker_placement_failure", "cleanup_failure", "synthetic_worker_read_vsock_marker"})
         provenance = self.payloads["_provenance"]
         self.assertIn("actual_worker_show", provenance["actual_sanitized_captures"])
+        self.assertIn("synthetic_worker_read_vsock_marker", provenance["deterministic_synthetic_edge_cases"])
+        self.assertNotIn("synthetic_worker_read_vsock_marker", provenance["actual_sanitized_captures"])
         self.assertIn("question", provenance["deterministic_synthetic_edge_cases"])
         self.assertEqual(self.payloads["actual_worker_show"]["result"]["worker"]["residualResources"], [])
         self.assertEqual(self.payloads["actual_dispatch_not_found"]["error"]["code"], "dispatch_not_found")
+
+    def test_marked_worker_read_tail_recovers_explicit_structured_result(self):
+        normalized = ResultNormalizer.normalize(self.payloads["synthetic_worker_read_vsock_marker"])
+        self.assertEqual(normalized.status, "COMPLETED")
+        self.assertEqual(normalized.evidence,
+                         ("AGENTS.md", "docs/wsl-worker-runtime.md"))
+        self.assertTrue(SuccessEvidenceGate.evaluate(route(0), normalized, [])[0])
+
+    def test_unmarked_documentation_json_and_visible_crash_cannot_succeed(self):
+        payload = {
+            "source": "terminal", "status": {"worker": "running"},
+            "terminal": {"tail": [
+                'Documentation example: {"status":"completed","conclusion":"looks good",'
+                '"evidence":["doc"],"files_checked":["doc"],"unresolved_questions":[]}',
+                "worker crashed before final response",
+            ]},
+        }
+        normalized = ResultNormalizer.normalize(payload)
+        self.assertEqual(normalized.status, "RUNNING")
+        self.assertFalse(SuccessEvidenceGate.evaluate(route(0), normalized, [])[0])
+
+    def test_unmarked_documentation_json_without_crash_cannot_succeed(self):
+        payload = {
+            "source": "terminal", "status": {"worker": "running"},
+            "terminal": {"tail": [
+                'Example only: {"status":"completed","conclusion":"looks good",'
+                '"evidence":["doc"],"files_checked":["doc"],"unresolved_questions":[]}',
+            ]},
+        }
+        normalized = ResultNormalizer.normalize(payload)
+        self.assertFalse(SuccessEvidenceGate.evaluate(route(0), normalized, [])[0])
+
+    def test_prompt_failure_words_do_not_override_valid_marked_result(self):
+        payload = json.loads(json.dumps(self.payloads["synthetic_worker_read_vsock_marker"]))
+        payload["command"] = "Investigate this traceback and explain why worker crashed"
+        payload["task"] = "Explain why worker crashed"
+        normalized = ResultNormalizer.normalize(payload)
+        self.assertEqual(normalized.status, "COMPLETED")
+        self.assertTrue(SuccessEvidenceGate.evaluate(route(0), normalized, [])[0])
+
+    def test_explicit_failed_orca_status_overrides_marked_success(self):
+        payload = json.loads(json.dumps(self.payloads["synthetic_worker_read_vsock_marker"]))
+        payload["status"]["worker"] = "failed"
+        normalized = ResultNormalizer.normalize(payload)
+        self.assertEqual(normalized.status, "FAILED")
+        self.assertFalse(SuccessEvidenceGate.evaluate(route(0), normalized, [])[0])
+
+    def test_failed_worker_envelope_overrides_rich_legacy_success_result(self):
+        payload = {
+            "result": {
+                "status": "completed", "summary": "inspection complete",
+                "conclusion": "policy is consistent", "evidence": ["AGENTS.md"],
+                "files_checked": ["AGENTS.md"], "unresolved_questions": [],
+            },
+            "worker": {"status": "failed"},
+        }
+        normalized = ResultNormalizer.normalize(payload)
+        self.assertEqual(normalized.status, "FAILED")
+        self.assertFalse(SuccessEvidenceGate.evaluate(route(0), normalized, [])[0])
+
+    def test_later_malformed_marker_invalidates_earlier_success_marker(self):
+        payload = json.loads(json.dumps(self.payloads["synthetic_worker_read_vsock_marker"]))
+        payload["terminal"]["tail"].extend([
+            'ADAPTIVE_RESULT_JSON:{"status":"completed"',
+            "fatal crash",
+        ])
+        normalized = ResultNormalizer.normalize(payload)
+        self.assertEqual(normalized.status, "FAILED")
+        self.assertIn("malformed", normalized.reason)
+        self.assertFalse(SuccessEvidenceGate.evaluate(route(0), normalized, [])[0])
+
+    def test_test_failure_after_valid_implementation_marker_invalidates_success(self):
+        contract = {
+            "status": "completed", "summary": "implemented", "files_modified": [],
+            "requirements_completed": ["done"], "tests_run": ["unit"],
+            "test_results": ["1 passed"], "unexecuted_verification": [],
+            "workspace_diff": [],
+        }
+        payload = {"terminal": {"tail": [
+            "ADAPTIVE_RESULT_JSON:" + json.dumps(contract, separators=(",", ":")),
+            "1 failed, 1 passed",
+        ]}}
+        normalized = ResultNormalizer.normalize(payload)
+        self.assertEqual(normalized.status, "FAILED")
+        self.assertIn("substantive output", normalized.reason)
+        self.assertFalse(SuccessEvidenceGate.evaluate(
+            route(1, Authority.WORKSPACE_WRITE, Phase.IMPLEMENTATION), normalized, [])[0])
+
+    def test_transport_prefix_cannot_hide_semantic_test_failure(self):
+        payload = json.loads(json.dumps(self.payloads["synthetic_worker_read_vsock_marker"]))
+        payload["terminal"]["tail"][-1] = "worker_done delivery failed: 5 tests failed"
+        normalized = ResultNormalizer.normalize(payload)
+        self.assertEqual(normalized.status, "FAILED")
+        self.assertIn("substantive output", normalized.reason)
 
     def test_question_is_not_lost_as_timeout(self):
         adapter = object.__new__(OrcaAdapter)
@@ -459,6 +555,10 @@ class ProductionClosedLoopTests(unittest.TestCase):
             result = self.run_with(task, adapter)
             self.assertIs(result.final_status, PhaseStatus.SUCCESS)
             self.assertEqual(len(adapter.routes), expected)
+            self.assertIn("ADAPTIVE_RESULT_JSON:<compact JSON object>", adapter.specs[0])
+            self.assertLess(adapter.specs[0].index("First attempt worker_done exactly once"),
+                            adapter.specs[0].index("ADAPTIVE_RESULT_JSON:<compact JSON object>"))
+            self.assertIn("Do not call any tool after printing that final marker", adapter.specs[0])
 
     def test_repeated_inconclusive_retries_only_verification_gate(self):
         adapter = ClosedLoopAdapter({"verification": [

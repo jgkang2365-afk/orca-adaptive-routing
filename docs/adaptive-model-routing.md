@@ -71,6 +71,14 @@ ceiling; Sol/max is outside v0.2.
 ## Lifecycle, logical Gates, and attempts
 
 `LIFECYCLE_DONE != TASK_SUCCESS`. `worker_done` only closes the worker lifecycle.
+
+Every dispatched phase attempts `worker_done` exactly once and then ends its
+visible response with one final, single-line
+`ADAPTIVE_RESULT_JSON:<compact JSON object>` marker, regardless of lifecycle
+delivery success. No tool call or prose follows the marker. It is a bounded trusted-relay recovery contract for a
+WSL transport failure; unmarked JSON found in terminal prose is never accepted
+as task evidence. An explicit Orca failure status or visible worker crash takes
+precedence over a success marker.
 Each plan phase is a logical Gate with its own attempt history. Every attempt
 records its parent, phase, model, effort, rank, authority, classification,
 decision, material retry delta, file changes, workspace/target fingerprints,
