@@ -76,17 +76,22 @@ Every dispatched phase first constructs one complete result object satisfying
 its phase contract. The object's `summary` string is exactly three sentences.
 The worker serializes the object as compact UTF-8 JSON, keeps both it and its
 base64url representation in memory, and makes one final shell compound tool
-call. That command attempts `worker_done` exactly once with the three-sentence
-summary as `--body`, then prints one final framed
-`ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON>:END_ADAPTIVE_RESULT`
+call. The result contains required phase fields and concise evidence without
+echoing the Coordinator's input evidence packet. Its terminal envelope is
+gzip-compressed before base64url encoding so ordinary multi-file evidence stays
+below the TUI folding boundary without dropping exact changed paths. That
+command attempts `worker_done` exactly once with the three-sentence summary as
+`--body`, then prints one final framed
+`ADAPTIVE_RESULT_GZ64:<base64url gzip-compressed compact UTF-8 JSON>:END_ADAPTIVE_RESULT`
 marker encoding the same compact JSON bytes regardless of the lifecycle CLI's
 exit status, with no later tool call or prose. The marker is durable terminal
 evidence, not a second lifecycle message: it covers both an explicit transport
 failure and a successful CLI response that never reaches the Orca inbox.
 Preparing it must not create a temporary file or write to the workspace, so the
 contract remains valid under a READ_ONLY sandbox. Padding is optional and
-terminal-inserted whitespace inside the base64url payload is ignored. The legacy
-`ADAPTIVE_RESULT_JSON:` marker remains read-compatible. This is a bounded
+terminal-inserted whitespace inside the base64url payload is ignored. Decompressed
+results remain capped at 64 KiB. The legacy `ADAPTIVE_RESULT_B64:` and
+`ADAPTIVE_RESULT_JSON:` markers remain read-compatible. This is a bounded
 trusted-relay recovery contract for a WSL transport failure; unmarked JSON found
 in terminal prose is never accepted as task evidence. An explicit Orca failure
 status or visible worker crash takes precedence over a success marker. Orca CLI

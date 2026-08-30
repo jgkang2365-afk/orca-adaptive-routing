@@ -4,11 +4,13 @@ import base64
 import binascii
 import json
 import re
+import zlib
 from typing import Any, Iterator, Mapping, Sequence
 
 
 RESULT_LIMIT = 65_536
 B64_MARKER = "ADAPTIVE_RESULT_B64:"
+GZ64_MARKER = "ADAPTIVE_RESULT_GZ64:"
 B64_END_MARKER = ":END_ADAPTIVE_RESULT"
 JSON_MARKER = "ADAPTIVE_RESULT_JSON:"
 
@@ -138,6 +140,39 @@ def _decode_b64_result(
     return result, None
 
 
+def _decode_gz64_result(
+    text: str, marked: int, limit: int,
+) -> tuple[Mapping[str, Any] | None, str | None]:
+    start = marked + len(GZ64_MARKER)
+    end = text.find(B64_END_MARKER, start)
+    label = "ADAPTIVE_RESULT_GZ64"
+    if end < 0:
+        return None, f"final {label} marker is malformed or truncated"
+    encoded = re.sub(r"\s+", "", text[start:end])
+    if not encoded or len(encoded.encode("ascii", errors="replace")) > limit:
+        return None, f"final {label} marker is malformed or truncated"
+    if not re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", encoded):
+        return None, f"final {label} marker is malformed or truncated"
+    padded = encoded + ("=" * (-len(encoded) % 4))
+    try:
+        compressed = base64.b64decode(padded, altchars=b"-_", validate=True)
+        inflater = zlib.decompressobj(wbits=31)
+        decoded = inflater.decompress(compressed, limit + 1)
+        if (len(decoded) > limit or not inflater.eof or inflater.unconsumed_tail
+                or inflater.unused_data):
+            return None, f"final {label} exceeds the bounded result limit"
+        value = json.loads(decoded.decode("utf-8"))
+    except (binascii.Error, UnicodeDecodeError, ValueError, zlib.error, RecursionError):
+        return None, f"final {label} marker is malformed or truncated"
+    error = _trailing_error(text[end + len(B64_END_MARKER):], label)
+    if error:
+        return None, error
+    result = result_contract_mapping(value)
+    if result is None:
+        return None, f"final {label} does not satisfy the worker result contract"
+    return result, None
+
+
 def _decode_json_result(
     text: str, marked: int,
 ) -> tuple[Mapping[str, Any] | None, str | None]:
@@ -163,10 +198,14 @@ def final_marked_structured_result(
     """Decode the last framed/legacy marker at the visible output boundary."""
     text = _terminal_text(payload, limit)
     b64_marked = text.rfind(B64_MARKER)
+    gz64_marked = text.rfind(GZ64_MARKER)
     json_marked = text.rfind(JSON_MARKER)
-    if b64_marked < 0 and json_marked < 0:
+    if b64_marked < 0 and gz64_marked < 0 and json_marked < 0:
         return None, None
-    if b64_marked > json_marked:
+    newest = max(b64_marked, gz64_marked, json_marked)
+    if newest == gz64_marked:
+        result, error = _decode_gz64_result(text, gz64_marked, limit)
+    elif newest == b64_marked:
         result, error = _decode_b64_result(text, b64_marked, limit)
     else:
         result, error = _decode_json_result(text, json_marked)
