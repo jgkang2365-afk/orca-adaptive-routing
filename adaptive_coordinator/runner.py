@@ -421,6 +421,7 @@ class FailureClassifier:
                    "assertionerror", "type error", "typeerror", "lint failure")
     ORCHESTRATION_ERROR_CODES = {
         "agent_unconfigured",
+        "agent_readiness_blocked",
         "selector_not_found",
         "worker_placement_failure",
     }

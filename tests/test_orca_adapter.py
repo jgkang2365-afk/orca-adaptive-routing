@@ -42,7 +42,14 @@ class FakeRunner:
         if command[1:3] == ["terminal", "create"]:
             return {"terminal": {"handle": "term_test"}}
         if command[1:3] == ["terminal", "wait"]:
-            return {"condition": "tui-idle"}
+            return {
+                "wait": {
+                    "condition": "tui-idle",
+                    "satisfied": True,
+                    "status": "running",
+                    "blockedReason": None,
+                }
+            }
         if command[1:3] == ["orchestration", "worker-start"]:
             return {"dispatchId": "ctx_test"}
         if command[1:3] == ["orchestration", "task-update"]:
@@ -148,6 +155,171 @@ class OrcaAdapterTests(unittest.TestCase):
             r"path:\\wsl.localhost\Ubuntu-24.04\home\user\project",
             worker_start,
         )
+
+    def test_codex_update_prompt_sends_skip_then_uses_same_terminal(self) -> None:
+        original = self.adapter.runner
+        waits = [
+            {
+                "wait": {
+                    "condition": "tui-idle",
+                    "satisfied": False,
+                    "status": "running",
+                    "blockedReason": "codex-update-prompt",
+                }
+            },
+            {
+                "wait": {
+                    "condition": "tui-idle",
+                    "satisfied": True,
+                    "status": "running",
+                    "blockedReason": None,
+                }
+            },
+        ]
+
+        def update_prompt(command):
+            command = list(command)
+            if command[1:3] == ["terminal", "wait"]:
+                self.runner.commands.append(command)
+                return waits.pop(0)
+            if command[1:3] == ["terminal", "send"]:
+                self.runner.commands.append(command)
+                return {"sent": True}
+            return original(command)
+
+        self.adapter.runner = update_prompt
+        worker = self.adapter.start_worker(
+            "run_test", "task_test", route(Authority.READ_ONLY)
+        )
+
+        self.assertEqual(worker.dispatch_id, "ctx_test")
+        sends = [command for command in self.runner.commands
+                 if command[1:3] == ["terminal", "send"]]
+        self.assertEqual(len(sends), 1)
+        self.assertEqual(sends[0][sends[0].index("--text") + 1], "2")
+        self.assertNotIn("1", sends[0])
+        creates = [command for command in self.runner.commands
+                   if command[1:3] == ["terminal", "create"]]
+        starts = [command for command in self.runner.commands
+                  if command[1:3] == ["orchestration", "worker-start"]]
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(len(starts), 1)
+        self.assertIn("term_test", starts[0])
+
+    def test_unknown_tui_blocker_closes_terminal_without_sending_or_starting(self) -> None:
+        original = self.adapter.runner
+
+        def blocked(command):
+            command = list(command)
+            if command[1:3] == ["terminal", "wait"]:
+                self.runner.commands.append(command)
+                return {
+                    "wait": {
+                        "condition": "tui-idle",
+                        "satisfied": False,
+                        "status": "running",
+                        "blockedReason": "unknown-interactive-prompt",
+                    }
+                }
+            return original(command)
+
+        self.adapter.runner = blocked
+        with self.assertRaises(CoordinatorError) as raised:
+            self.adapter.start_worker(
+                "run_test", "task_test", route(Authority.READ_ONLY)
+            )
+
+        self.assertEqual(raised.exception.code, "agent_readiness_blocked")
+        self.assertFalse(any(command[1:3] == ["terminal", "send"]
+                             for command in self.runner.commands))
+        self.assertFalse(any(command[1:3] == ["orchestration", "worker-start"]
+                             for command in self.runner.commands))
+        closes = [command for command in self.runner.commands
+                  if command[1:3] == ["terminal", "close"]]
+        self.assertEqual(len(closes), 1)
+        self.assertEqual(closes[0][closes[0].index("--terminal") + 1], "term_test")
+
+    def test_unresolved_update_prompt_sends_skip_once_then_closes(self) -> None:
+        original = self.adapter.runner
+        wait_count = 0
+
+        def unresolved(command):
+            nonlocal wait_count
+            command = list(command)
+            if command[1:3] == ["terminal", "wait"]:
+                wait_count += 1
+                self.runner.commands.append(command)
+                return {
+                    "wait": {
+                        "condition": "tui-idle",
+                        "satisfied": False,
+                        "status": "running",
+                        "blockedReason": "codex-update-prompt",
+                    }
+                }
+            if command[1:3] == ["terminal", "send"]:
+                self.runner.commands.append(command)
+                return {"sent": True}
+            return original(command)
+
+        self.adapter.runner = unresolved
+        with self.assertRaises(CoordinatorError) as raised:
+            self.adapter.start_worker(
+                "run_test", "task_test", route(Authority.READ_ONLY)
+            )
+
+        self.assertEqual(raised.exception.code, "agent_readiness_blocked")
+        self.assertEqual(wait_count, 2)
+        sends = [command for command in self.runner.commands
+                 if command[1:3] == ["terminal", "send"]]
+        self.assertEqual(len(sends), 1)
+        self.assertEqual(sends[0][sends[0].index("--text") + 1], "2")
+        self.assertNotIn("1", sends[0])
+        self.assertFalse(any(command[1:3] == ["orchestration", "worker-start"]
+                             for command in self.runner.commands))
+        self.assertEqual(sum(command[1:3] == ["terminal", "close"]
+                             for command in self.runner.commands), 1)
+
+    def test_malformed_tui_readiness_fails_closed(self) -> None:
+        malformed_responses = (
+            {"wait": {"condition": "tui-idle", "status": "running"}},
+            {"wait": {"condition": "tui-idle", "satisfied": "false"}},
+            {"wait": {"condition": "process-exit", "satisfied": True}},
+        )
+
+        for response in malformed_responses:
+            with self.subTest(response=response):
+                runner = FakeRunner()
+                adapter = OrcaAdapter(
+                    "/home/user/projects/test",
+                    runner=runner,
+                    worktree_selector="path:test",
+                    change_detector=lambda: {},
+                )
+                original = adapter.runner
+
+                def malformed(command, *, _response=response):
+                    command = list(command)
+                    if command[1:3] == ["terminal", "wait"]:
+                        runner.commands.append(command)
+                        return _response
+                    return original(command)
+
+                adapter.runner = malformed
+                with self.assertRaises(CoordinatorError) as raised:
+                    adapter.start_worker(
+                        "run_test", "task_test", route(Authority.READ_ONLY)
+                    )
+
+                self.assertEqual(raised.exception.code, "agent_readiness_blocked")
+                self.assertFalse(any(command[1:3] == ["orchestration", "worker-start"]
+                                     for command in runner.commands))
+                closes = [command for command in runner.commands
+                          if command[1:3] == ["terminal", "close"]]
+                self.assertEqual(len(closes), 1)
+                self.assertEqual(
+                    closes[0][closes[0].index("--terminal") + 1], "term_test"
+                )
 
     def test_agent_readiness_race_retries_same_terminal_then_starts_one_dispatch(self) -> None:
         original = self.adapter.runner
