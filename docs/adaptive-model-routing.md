@@ -76,8 +76,11 @@ Every dispatched phase first constructs one complete result object satisfying
 its phase contract. The object's `summary` string is exactly three sentences.
 The worker serializes the object as compact UTF-8 JSON, keeps both it and its
 base64url representation in memory, and makes one final shell compound tool
-call. That command attempts `worker_done` exactly once with the three-sentence
-summary as `--body`, then prints one final framed
+call. The compact result is capped at 768 UTF-8 bytes, contains only required
+phase fields and concise evidence, and does not echo the Coordinator's input
+evidence packet; this keeps the terminal marker below the TUI folding boundary.
+That command attempts `worker_done` exactly once with the three-sentence summary
+as `--body`, then prints one final framed
 `ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON>:END_ADAPTIVE_RESULT`
 marker encoding the same compact JSON bytes regardless of the lifecycle CLI's
 exit status, with no later tool call or prose. The marker is durable terminal

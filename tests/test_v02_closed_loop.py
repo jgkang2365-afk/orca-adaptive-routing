@@ -613,6 +613,8 @@ class ProductionClosedLoopTests(unittest.TestCase):
             ordered = (
                 "Construct one complete result object first",
                 "The summary string itself must be exactly three sentences",
+                "do not echo it as an output field",
+                "complete compact JSON must be at most 768 UTF-8 bytes",
                 "Serialize the complete object as compact UTF-8 JSON and keep it in memory",
                 "Before lifecycle delivery, prepare the base64url representation",
                 "Do not create a temporary file or write anywhere",
@@ -627,6 +629,8 @@ class ProductionClosedLoopTests(unittest.TestCase):
             self.assertEqual(positions, sorted(positions))
             self.assertIn("Never call worker_done twice", spec)
             self.assertIn("encoding the same compact JSON object", spec)
+            self.assertIn("shorten values without dropping required keys", spec)
+            self.assertIn("terminal evidence is never folded or elided by the TUI", spec)
             self.assertIn("READ-ONLY workers cannot write to /tmp or the workspace", spec)
             self.assertIn("durable terminal evidence for the Coordinator", spec)
             self.assertIn("it is not a second lifecycle message", spec)
