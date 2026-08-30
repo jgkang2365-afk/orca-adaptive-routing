@@ -935,13 +935,18 @@ class ProductionRunner:
         packet = json.dumps(evidence.to_dict(), ensure_ascii=False, separators=(",", ":")) if evidence else "{}"
         return (f"User task:\n{task}\n\nAssigned logical gate: {gate.logical_gate_id if gate else route.phase.value}; "
                 f"phase: {route.phase.value}; role: {route.role}; authority: {route.authority.value}. "
-                "Read AGENTS.md. Do only this gate; do not spawn workers. Return a structured result compatible with JSON "
-                f"including status, summary and: {contract}. Evidence packet (bounded): {packet}. "
-                "Report escalation findings to the Coordinator. First attempt worker_done exactly once with the structured result. "
-                "Regardless of whether lifecycle delivery succeeds, then finish with exactly one final visible framed marker "
+                "Read AGENTS.md. Do only this gate; do not spawn workers. Construct one complete result object first, "
+                f"including status, summary and: {contract}. The summary string itself must be exactly three sentences. "
+                f"Evidence packet (bounded): {packet}. Report escalation findings to the Coordinator. "
+                "Serialize the complete object as compact UTF-8 JSON. Before attempting lifecycle delivery, prepare the "
+                "base64url fallback representation of those exact JSON bytes; if an encoding command is needed, run it "
+                "now, before worker_done. "
+                "Attempt worker_done exactly once with --body equal to that compact JSON object. Never call worker_done twice. "
+                "If worker_done succeeds, stop immediately: do not print a marker, emit prose, or call another tool. "
+                "If and only if worker_done fails to deliver, print exactly one final visible framed marker "
                 "ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON, padding optional>:END_ADAPTIVE_RESULT "
-                "containing the same result. Whitespace inside the base64url payload is allowed for terminal wrapping. "
-                "Do not emit prose or call any tool after printing that final marker.")
+                "encoding the same compact JSON object. Whitespace inside the base64url payload is allowed for terminal "
+                "wrapping. After the fallback marker, emit no prose and call no tool.")
 
     @staticmethod
     def _changed_paths(before: Mapping[str, str], after: Mapping[str, str]) -> list[str]:

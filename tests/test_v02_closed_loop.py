@@ -609,12 +609,24 @@ class ProductionClosedLoopTests(unittest.TestCase):
             result = self.run_with(task, adapter)
             self.assertIs(result.final_status, PhaseStatus.SUCCESS)
             self.assertEqual(len(adapter.routes), expected)
-            self.assertIn("ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON, padding optional>",
-                          adapter.specs[0])
-            self.assertLess(adapter.specs[0].index("First attempt worker_done exactly once"),
-                            adapter.specs[0].index("ADAPTIVE_RESULT_B64:"))
-            self.assertIn("Do not emit prose or call any tool after printing that final marker",
-                          adapter.specs[0])
+            spec = adapter.specs[0]
+            ordered = (
+                "Construct one complete result object first",
+                "The summary string itself must be exactly three sentences",
+                "Serialize the complete object as compact UTF-8 JSON",
+                "Before attempting lifecycle delivery, prepare the base64url fallback",
+                "Attempt worker_done exactly once with --body equal to that compact JSON object",
+                "If worker_done succeeds, stop immediately",
+                "If and only if worker_done fails to deliver",
+                "ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON, padding optional>",
+                "After the fallback marker, emit no prose and call no tool",
+            )
+            positions = [spec.index(fragment) for fragment in ordered]
+            self.assertEqual(positions, sorted(positions))
+            self.assertIn("Never call worker_done twice", spec)
+            self.assertIn("encoding the same compact JSON object", spec)
+            self.assertIn("do not print a marker, emit prose, or call another tool", spec)
+            self.assertNotIn("Regardless of whether lifecycle delivery succeeds", spec)
 
     def test_repeated_inconclusive_retries_only_verification_gate(self):
         adapter = ClosedLoopAdapter({"verification": [
