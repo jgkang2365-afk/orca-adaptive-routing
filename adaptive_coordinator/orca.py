@@ -185,6 +185,7 @@ class OrcaAdapter:
         self.executable = executable
         self.runner = runner
         self.change_detector = change_detector or (lambda: _git_changes(self.workspace))
+        self._pending_lifecycle_messages: list[Mapping[str, Any]] = []
         self._validate_wsl_workspace()
         self.worktree_selector = worktree_selector or self._resolve_orca_worktree_selector()
 
@@ -486,64 +487,124 @@ class OrcaAdapter:
         deadline = time.monotonic() + max(timeout_ms, 0) / 1000
         check_timeout_ms = max(timeout_ms, 0)
         delivery: dict[str, Any] = {}
-        while True:
-            delivery = self.runner(
+        delivery_to_ack: str | None = None
+
+        def acknowledge(delivery_id: str) -> None:
+            # Acknowledge only the fully inspected FIFO batch. `--peek` leaves
+            # the next batch unread for this or another logical Gate.
+            self.runner(
                 [
-                    self.executable,
-                    "orchestration",
-                    "check",
-                    "--run",
-                    run_id,
-                    "--wait",
-                    "--types",
-                    "worker_done,escalation,question",
-                    "--timeout-ms",
-                    str(check_timeout_ms),
-                    "--json",
+                    self.executable, "orchestration", "check",
+                    "--run", run_id, "--ack", delivery_id, "--peek",
+                    "--types", "worker_done,escalation,question", "--json",
                 ]
             )
-            messages = delivery.get("messages") or delivery.get("delivery", {}).get("messages") or []
-            for message in messages:
-                kind = message.get("type") or message.get("message_type")
-                embedded = _bounded_json_mapping(message.get("payload")) or {}
-                dispatch_ids = tuple(
-                    str(value) for value in (
-                        message.get("dispatch_id"), message.get("dispatchId"),
-                        embedded.get("dispatch_id"), embedded.get("dispatchId"),
-                    ) if value is not None
-                )
-                task_ids = tuple(
-                    str(value) for value in (
-                        message.get("task_id"), message.get("taskId"),
-                        embedded.get("task_id"), embedded.get("taskId"),
-                    ) if value is not None
-                )
-                # Contradictory or absent identity evidence never settles a worker.
-                identity_matches = (
-                    bool(dispatch_ids)
-                    and all(value == worker.dispatch_id for value in dispatch_ids)
-                    and all(value == worker.task_id for value in task_ids)
-                )
-                if not identity_matches:
+
+        def identity(message: Mapping[str, Any]) -> tuple[str, str | None] | None:
+            embedded = _bounded_json_mapping(message.get("payload")) or {}
+            dispatch_ids = tuple(
+                str(value) for value in (
+                    message.get("dispatch_id"), message.get("dispatchId"),
+                    embedded.get("dispatch_id"), embedded.get("dispatchId"),
+                ) if value is not None
+            )
+            task_ids = tuple(
+                str(value) for value in (
+                    message.get("task_id"), message.get("taskId"),
+                    embedded.get("task_id"), embedded.get("taskId"),
+                ) if value is not None
+            )
+            if (not dispatch_ids or len(set(dispatch_ids)) != 1
+                    or len(set(task_ids)) > 1):
+                return None
+            return dispatch_ids[0], task_ids[0] if task_ids else None
+
+        def inspect_batch(
+            messages: Sequence[Any],
+        ) -> Mapping[str, Any] | None:
+            selected: list[Mapping[str, Any]] = []
+            for candidate in messages:
+                if not isinstance(candidate, Mapping):
                     continue
-                if kind == "worker_done":
-                    structured = _bounded_json_mapping(message.get("body"))
-                    completion: dict[str, Any] = {
-                        "mode": "worker_done", "message": message,
-                        "result": structured, "delivery": delivery,
-                    }
-                    if structured is None:
-                        remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+                kind = candidate.get("type") or candidate.get("message_type")
+                if kind not in {"worker_done", "escalation", "question"}:
+                    continue
+                message_identity = identity(candidate)
+                if message_identity is None:
+                    continue
+                dispatch_id, task_id = message_identity
+                if dispatch_id == worker.dispatch_id and (
+                    task_id is None or task_id == worker.task_id
+                ):
+                    selected.append(candidate)
+                else:
+                    self._pending_lifecycle_messages.append(candidate)
+            if len(self._pending_lifecycle_messages) > 256:
+                raise CoordinatorError(
+                    "pending lifecycle inbox exceeded its bounded capacity",
+                    code="lifecycle_inbox_overflow",
+                )
+            if len(selected) > 1:
+                raise CoordinatorError(
+                    "multiple lifecycle outcomes target the same Dispatch in one batch",
+                    code="lifecycle_batch_conflict",
+                )
+            return selected[0] if selected else None
+
+        def completion_from(
+            message: Mapping[str, Any], source: Mapping[str, Any],
+        ) -> dict[str, Any]:
+            kind = message.get("type") or message.get("message_type")
+            if kind == "worker_done":
+                structured = _bounded_json_mapping(message.get("body"))
+                completion: dict[str, Any] = {
+                    "mode": "worker_done", "message": message,
+                    "result": structured, "delivery": source,
+                }
+                if structured is None:
+                    remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+                    if remaining_ms <= 0:
+                        completion["safe_to_read"] = False
+                    else:
                         completion["readiness"] = self._wait_for_tui_idle(
                             worker.terminal_handle,
                             remaining_ms,
                             allow_update_skip=False,
                         )
-                    return completion
-                if kind == "escalation":
-                    return {"mode": "escalation", "message": message, "delivery": delivery}
-                if kind == "question":
-                    return {"mode": "question", "message": message, "delivery": delivery}
+                return completion
+            return {"mode": str(kind), "message": message, "delivery": source}
+
+        pending = list(getattr(self, "_pending_lifecycle_messages", []))
+        self._pending_lifecycle_messages = []
+        pending_match = inspect_batch(pending)
+        if pending_match is not None:
+            return completion_from(pending_match, {"source": "pending_inbox"})
+
+        while True:
+            check_command = [
+                self.executable, "orchestration", "check", "--run", run_id,
+            ]
+            if delivery_to_ack:
+                check_command += ["--ack", delivery_to_ack]
+            check_command += [
+                "--wait", "--types", "worker_done,escalation,question",
+                "--timeout-ms", str(max(1, check_timeout_ms)), "--json",
+            ]
+            delivery = self.runner(check_command)
+            delivery_to_ack = None
+            delivery_id = delivery.get("deliveryId") or delivery.get("delivery_id")
+            messages = delivery.get("messages") or delivery.get("delivery", {}).get("messages") or []
+            selected = inspect_batch(messages)
+            if selected is not None:
+                if delivery_id:
+                    acknowledge(str(delivery_id))
+                return completion_from(selected, delivery)
+
+            # Orca check replays the oldest unacknowledged FIFO batch. Carry
+            # its acknowledgement into the next check only after every message
+            # in this batch was inspected and rejected for this worker.
+            if delivery_id:
+                delivery_to_ack = str(delivery_id)
 
             remaining_seconds = deadline - time.monotonic()
             if remaining_seconds <= 0:
@@ -554,14 +615,12 @@ class OrcaAdapter:
                 break
             check_timeout_ms = max(1, int(remaining_seconds * 1000))
 
-        # Only after the lifecycle deadline expires may terminal evidence act
-        # as a fallback. An exact idle probe prevents a still-streaming read.
-        readiness = self._wait_for_tui_idle(
-            worker.terminal_handle,
-            0,
-            allow_update_skip=False,
-        )
-        return {"mode": "timeout", "delivery": delivery, "readiness": readiness}
+        # Orca requires a positive terminal-wait timeout. Once the shared
+        # deadline is exhausted there is no safe budget left to prove idle, so
+        # explicitly forbid terminal fallback rather than reading a live TUI.
+        if delivery_to_ack:
+            acknowledge(delivery_to_ack)
+        return {"mode": "timeout", "delivery": delivery, "safe_to_read": False}
 
     def trusted_relay(
         self,
