@@ -1360,6 +1360,20 @@ class OrcaAdapterTests(unittest.TestCase):
                 _default_runner(["orca-ide", "orchestration", "worker-stop"])
         self.assertEqual(raised.exception.code, "stop_unknown")
 
+    def test_default_runner_bounds_orca_cli_timeout(self) -> None:
+        command = [
+            "orca-ide", "orchestration", "check", "--wait",
+            "--timeout-ms", "2000", "--json",
+        ]
+        with patch(
+            "adaptive_coordinator.orca.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(command, 7.0),
+        ) as run:
+            with self.assertRaises(CoordinatorError) as raised:
+                _default_runner(command)
+        self.assertEqual(raised.exception.code, "orca_command_timeout")
+        self.assertEqual(run.call_args.kwargs["timeout"], 7.0)
+
     def test_task_update_failure_after_fence_is_lifecycle_error(self) -> None:
         def settlement_failure(command):
             if command[1:3] == ["orchestration", "worker-stop"]:

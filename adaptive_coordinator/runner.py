@@ -339,6 +339,7 @@ class FailureClassifier:
     ORCHESTRATION_ERROR_CODES = {
         "agent_unconfigured",
         "agent_readiness_blocked",
+        "orca_command_timeout",
         "selector_not_found",
         "worker_placement_failure",
     }
@@ -938,9 +939,11 @@ class ProductionRunner:
                 "Read AGENTS.md. Do only this gate; do not spawn workers. Construct one complete result object first, "
                 f"including status, summary and: {contract}. The summary string itself must be exactly three sentences. "
                 f"Evidence packet (bounded): {packet}. Report escalation findings to the Coordinator. "
-                "Serialize the complete object as compact UTF-8 JSON. Before attempting lifecycle delivery, prepare the "
-                "base64url fallback representation of those exact JSON bytes; if an encoding command is needed, run it "
-                "now, before worker_done. "
+                "Serialize the complete object as compact UTF-8 JSON and keep it in memory (for example, a shell "
+                "variable). Before attempting lifecycle delivery, prepare the base64url fallback representation of "
+                "those exact JSON bytes in memory. Do not create a temporary file or write anywhere to prepare the "
+                "fallback: READ-ONLY workers cannot write to /tmp or the workspace. A shell pipeline such as printf "
+                "piped to base64 and tr may be used to populate another shell variable before worker_done. "
                 "Attempt worker_done exactly once with --body equal to that compact JSON object. Never call worker_done twice. "
                 "If worker_done succeeds, stop immediately: do not print a marker, emit prose, or call another tool. "
                 "If and only if worker_done fails to deliver, print exactly one final visible framed marker "
