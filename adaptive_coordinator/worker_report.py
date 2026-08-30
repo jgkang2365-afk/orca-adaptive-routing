@@ -84,7 +84,9 @@ def report_worker_result(
         result = _evidence_failure("required result exceeds the 64 KiB decoded evidence limit")
     encoded = _encoded(result)
     if len(encoded) > GZ64_ENCODED_LIMIT:
-        result = _evidence_failure("required result exceeds the 512-character GZ64 terminal envelope")
+        result = _evidence_failure(
+            f"required result exceeds the {GZ64_ENCODED_LIMIT}-character GZ64 terminal envelope"
+        )
         encoded = _encoded(result)
     status = str(result.get("status", "failed")).lower()
     succeeded = status in {"success", "succeeded", "completed", "complete"}

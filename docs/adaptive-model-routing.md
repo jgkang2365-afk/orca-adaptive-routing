@@ -79,8 +79,9 @@ makes one final call to the installed `orca-adaptive worker-report` helper. The
 result contains required phase fields and concise evidence without
 echoing the Coordinator's input evidence packet. Its terminal envelope is
 gzip-compressed before base64url encoding so ordinary multi-file evidence stays
-below the TUI folding boundary without dropping exact changed paths. The GZ64
-payload is capped at 512 characters. Optional prose may be shortened to fit, but
+bounded without dropping exact changed paths. The marker-only final assistant
+response avoids relying on TUI tool-output visibility. The GZ64 payload is capped
+at 4,096 characters. Optional prose may be shortened to fit, but
 exact paths, identifiers, and required phase keys are never altered; a result
 that still cannot fit is reported as `INSUFFICIENT_SUCCESS_EVIDENCE`, never as
 a truncated success. The helper rejects result content containing its protected
