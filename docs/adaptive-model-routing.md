@@ -74,19 +74,25 @@ ceiling; Sol/max is outside v0.2.
 
 Every dispatched phase first constructs one complete result object satisfying
 its phase contract. The object's `summary` string is exactly three sentences.
-The worker serializes the object as compact UTF-8 JSON and attempts
-`worker_done` exactly once with that JSON as `--body`. A successful lifecycle
-delivery ends the turn immediately with no marker, prose, or further tool call.
-If and only if that delivery fails, the worker prints one final framed
+The worker serializes the object as compact UTF-8 JSON, keeps both it and its
+base64url representation in memory, and makes one final shell compound tool
+call. That command attempts `worker_done` exactly once with the three-sentence
+summary as `--body`, then prints one final framed
 `ADAPTIVE_RESULT_B64:<base64url compact UTF-8 JSON>:END_ADAPTIVE_RESULT`
-marker encoding the same compact JSON bytes, with no later tool call or prose.
-The fallback representation is prepared before the lifecycle attempt; any
-encoding command runs before `worker_done`. Padding is optional and
+marker encoding the same compact JSON bytes regardless of the lifecycle CLI's
+exit status, with no later tool call or prose. The marker is durable terminal
+evidence, not a second lifecycle message: it covers both an explicit transport
+failure and a successful CLI response that never reaches the Orca inbox.
+Preparing it must not create a temporary file or write to the workspace, so the
+contract remains valid under a READ_ONLY sandbox. Padding is optional and
 terminal-inserted whitespace inside the base64url payload is ignored. The legacy
 `ADAPTIVE_RESULT_JSON:` marker remains read-compatible. This is a bounded
 trusted-relay recovery contract for a WSL transport failure; unmarked JSON found
 in terminal prose is never accepted as task evidence. An explicit Orca failure
-status or visible worker crash takes precedence over a success marker.
+status or visible worker crash takes precedence over a success marker. Orca CLI
+subprocesses also have a Coordinator-side wall-clock ceiling because the bridge
+may fail to honor its own timeout; expiry is an orchestration failure and never
+a capability-escalation signal.
 Each plan phase is a logical Gate with its own attempt history. Every attempt
 records its parent, phase, model, effort, rank, authority, classification,
 decision, material retry delta, file changes, workspace/target fingerprints,
