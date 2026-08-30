@@ -670,16 +670,28 @@ class ProductionRunner:
                         "BLOCKED", question, reason="worker question requires resolution",
                         needs_user_input=True, evidence=(question,))
                 else:
-                    raw = completion.get("result") if mode == "worker_done" else None
-                    if not isinstance(raw, Mapping):
-                        try:
-                            raw = adapter.read_result(worker)
-                        except Exception as exc:
-                            if lifecycle_settled:
-                                raise LifecycleSettlementError(
-                                    f"result read failed after lifecycle settlement: {exc}") from exc
-                            raise
-                    normalized = ResultNormalizer.normalize(raw)
+                    safe_to_read = completion.get("safe_to_read", True) is not False
+                    if mode == "timeout" and not safe_to_read:
+                        explicit_failure = FailureClassification(
+                            FailureClass.ORCHESTRATION_FAILURE, "high",
+                            "lifecycle_deadline_exhausted",
+                            ("No matching lifecycle message or safe terminal evidence before deadline",),
+                        )
+                        normalized = NormalizedWorkerResult(
+                            "FAILED", "lifecycle deadline exhausted",
+                            reason="no safe completion evidence before lifecycle deadline",
+                        )
+                    else:
+                        raw = completion.get("result") if mode == "worker_done" else None
+                        if not isinstance(raw, Mapping) and safe_to_read:
+                            try:
+                                raw = adapter.read_result(worker)
+                            except Exception as exc:
+                                if lifecycle_settled:
+                                    raise LifecycleSettlementError(
+                                        f"result read failed after lifecycle settlement: {exc}") from exc
+                                raise
+                        normalized = ResultNormalizer.normalize(raw or {})
                 if (route.authority is Authority.WORKSPACE_WRITE
                         and self._non_idempotent_intent(task)
                         and not any(normalized.fields.get(key) for key in (

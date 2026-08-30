@@ -270,6 +270,27 @@ class RunnerContractTests(unittest.TestCase):
         )
         self.assertIs(result.final_status, PhaseStatus.FAILED)
 
+    def test_unsafe_deadline_timeout_is_terminal_without_second_worker(self):
+        class DeadlineAdapter(FakeAdapter):
+            def wait_for_completion(self, run_id, worker, timeout_ms):
+                return {"mode": "timeout", "safe_to_read": False, "delivery": {}}
+
+            def read_result(self, worker):
+                raise AssertionError("unsafe timeout must not read terminal evidence")
+
+        adapter = DeadlineAdapter(Path("/home/user/project"))
+        result = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(
+            "Inspect Markdown files. Do not modify files.", "/home/user/project"
+        )
+
+        self.assertIs(result.final_status, PhaseStatus.FAILED)
+        self.assertEqual(len(adapter.routes), 1)
+        self.assertEqual(len(adapter.released), 1)
+        attempt = result.logical_gates["investigation-1"].attempts[0]
+        self.assertEqual(attempt.failure_class, "ORCHESTRATION_FAILURE")
+        self.assertEqual(attempt.decision, "TERMINAL")
+        self.assertEqual(attempt.authority, "read-only")
+
     def test_j_every_started_worker_is_released(self):
         result, adapter = self.run_task("Implement a reversible database migration.")
         self.assertIs(result.final_status, PhaseStatus.SUCCESS)
