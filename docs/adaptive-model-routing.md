@@ -106,6 +106,14 @@ status or visible worker crash takes precedence over a success marker. Orca CLI
 subprocesses also have a Coordinator-side wall-clock ceiling because the bridge
 may fail to honor its own timeout; expiry is an orchestration failure and never
 a capability-escalation signal.
+
+Implementation `test_results` use exactly one of two non-mixing forms: a
+one-entry list containing an accepted whole framework pass summary, or one or
+more entries that are all `check_name: passed (optional detail)`. Expected-denial
+checks use the named form and report the observed denial in parentheses, rather
+than free prose containing `failed`; this keeps deterministic evidence
+machine-safe without weakening false-success rejection.
+
 Each plan phase is a logical Gate with its own attempt history. Every attempt
 records its parent, phase, model, effort, rank, authority, classification,
 decision, material retry delta, file changes, workspace/target fingerprints,
