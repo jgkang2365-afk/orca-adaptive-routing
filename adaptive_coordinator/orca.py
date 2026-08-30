@@ -68,7 +68,26 @@ def _parse_orca_output(output: str) -> dict[str, Any]:
 
 
 def _default_runner(command: Sequence[str]) -> dict[str, Any]:
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    # Orca commands cross the Windows/WSL transport boundary.  The CLI's own
+    # --timeout-ms has historically failed to return on a broken transport, so
+    # enforce a coordinator-side wall-clock bound as well.  Commands without an
+    # explicit timeout retain a conservative one-minute operational ceiling.
+    wall_timeout = 60.0
+    if "--timeout-ms" in command:
+        try:
+            requested = int(command[command.index("--timeout-ms") + 1]) / 1000
+            wall_timeout = max(5.0, requested + 5.0)
+        except (ValueError, IndexError):
+            pass
+    try:
+        completed = subprocess.run(
+            command, check=False, capture_output=True, text=True, timeout=wall_timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CoordinatorError(
+            f"Orca command exceeded coordinator wall-clock limit ({wall_timeout:.3f}s)",
+            code="orca_command_timeout",
+        ) from exc
     try:
         payload = _parse_orca_output(completed.stdout)
     except json.JSONDecodeError as exc:

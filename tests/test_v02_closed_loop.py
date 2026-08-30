@@ -613,8 +613,9 @@ class ProductionClosedLoopTests(unittest.TestCase):
             ordered = (
                 "Construct one complete result object first",
                 "The summary string itself must be exactly three sentences",
-                "Serialize the complete object as compact UTF-8 JSON",
-                "Before attempting lifecycle delivery, prepare the base64url fallback",
+                "Serialize the complete object as compact UTF-8 JSON and keep it in memory",
+                "Before attempting lifecycle delivery, prepare the base64url fallback representation",
+                "Do not create a temporary file or write anywhere",
                 "Attempt worker_done exactly once with --body equal to that compact JSON object",
                 "If worker_done succeeds, stop immediately",
                 "If and only if worker_done fails to deliver",
@@ -625,6 +626,8 @@ class ProductionClosedLoopTests(unittest.TestCase):
             self.assertEqual(positions, sorted(positions))
             self.assertIn("Never call worker_done twice", spec)
             self.assertIn("encoding the same compact JSON object", spec)
+            self.assertIn("READ-ONLY workers cannot write to /tmp or the workspace", spec)
+            self.assertIn("populate another shell variable before worker_done", spec)
             self.assertIn("do not print a marker, emit prose, or call another tool", spec)
             self.assertNotIn("Regardless of whether lifecycle delivery succeeds", spec)
 
