@@ -2,186 +2,135 @@
 
 ## Task
 
-Adaptive Coordinator v0.2 closed-loop routing
+Adaptive Coordinator v0.2.1 stabilization, automated verification, and deployment
 
 ## Status
 
-PASS
+BLOCKED — source, CI, review, candidate installation, routing dry-run, and xhigh READ_ONLY smoke passed, but mandatory end-to-end pilots and Production promotion are blocked by the live Orca terminal/agent registration contract.
 
 ## A. Baseline
 
-- Baseline main commit: `2c05edf30e0590aafc49b2f62b486ef7897a6ecd`.
-- Production installed commit before v0.2: `743d59d4346f2ee391f72c96d0cda9bed7b85503` (`0.1.0`).
-- Initial work branch: `feature/adaptive-v0.2-closed-loop`; implementation and lifecycle fixes were reviewed through PRs and merged rather than developed directly on `main`.
-- Working tree at start: clean.
-- Baseline tests: 43/43 PASS.
+- Baseline main commit: `5d15cf58b3d9b9107a0a3a57996916ba70394b8f`.
+- Production installed commit: `5d15cf58b3d9b9107a0a3a57996916ba70394b8f` (`0.2.0`).
+- Initial work branch: `fix/v0.2.1-stabilization`.
+- Working tree: clean.
+- Baseline tests: 177/177 PASS.
 
 ## B. Changes
 
 | Files | Purpose | Core change |
 |---|---|---|
-| `adaptive_coordinator/models.py` | State contract | Failure taxonomy, adaptive decisions, verification modes/outcomes, logical Gate and attempt metadata, bounded evidence and cost metrics |
-| `adaptive_coordinator/routing.py` | Routing policy | Central capability ladder, rank/+1 progression, risk floor, bilingual TaskBrief normalization and negation handling |
-| `adaptive_coordinator/runner.py` | Closed loop | Evidence Gates, decision loop, retry/no-progress/xhigh budgets, partial rerun, WRITE diagnosis/fencing, deterministic-first verification, schema v2 trace |
-| `adaptive_coordinator/orca.py` | Orca contract | Structured lifecycle normalization, question handling, deadlines, trusted-relay evidence and cleanup fencing |
-| `adaptive_coordinator/worker_report.py`, `result_sentinel.py` | Durable result transport | Bounded structured result helper and terminal marker without workspace/temp writes |
-| `adaptive_coordinator/benchmark.py`, `scripts/run-v02-benchmark.py` | Evaluation | Reproducible v0.1/all-Sol/v0.2 corpus comparison |
-| `adaptive_coordinator/cli.py`, `pyproject.toml` | Public contract | Additive result schema and `0.2.0` version/installed-commit reporting |
-| `tests/` | Regression/invariants | Closed-loop, payload, CLI, benchmark, installer, lifecycle and worker-report coverage |
-| `AGENTS.md`, `docs/adaptive-model-routing.md` | Durable policy | v0.2 invariants, evidence-first decisions, verification and cost-quality rules |
+| `adaptive_coordinator/runner.py`, `models.py`, `routing.py` | v0.2.1 state-machine hardening | Strong verification evidence, structured unexecuted checks, transient no-escalation, full capability budget, xhigh READ_ONLY diagnosis, focused REPLAN, and risk-floor loop fencing |
+| `adaptive_coordinator/orca.py` | Live Orca readiness | Bind Codex agent registration to the exact created terminal with bounded same-terminal polling and fail-closed cleanup |
+| `adaptive_coordinator/benchmark.py`, `scripts/run-v02-benchmark.py` | Quality/cost guard | Compute real zero-invariants and detect forced false-success perturbations |
+| `tests/` | Regression coverage | Target identity, false success, transient, Polling, budgets, xhigh, REPLAN, risk floor, readiness, cleanup, and CI contracts |
+| `.github/workflows/quality.yml` | Automated CI | `Adaptive Coordinator Quality / quality-gate` for tests, compile, shell syntax, diff check, and benchmark |
+| `README.md`, `AGENTS.md`, `docs/adaptive-model-routing.md`, `pyproject.toml` | Public contract | v0.2.1 policy/version and operating constraints |
 
-## C. Final Capability Ladder
+## C. Stabilization Result
 
-| Rank | Model | Effort |
-|---:|---|---|
-| 0 | `gpt-5.6-luna` | `low` |
-| 1 | `gpt-5.6-terra` | `medium` |
-| 2 | `gpt-5.6-terra` | `high` |
-| 3 | `gpt-5.6-sol` | `medium` |
-| 4 | `gpt-5.6-sol` | `high` |
-| 5 | `gpt-5.6-sol` | `xhigh` |
+- Verification requires successful status, explicit `VERIFIED`, concrete evidence, an empty `unresolved_questions` list, and target identity consistency.
+- Blocking or unstructured unexecuted verification cannot become success. Executable deterministic checks cannot be replaced by model review.
+- Repeated transient failures terminate without capability escalation.
+- The legal ladder remains reachable and bounded; automatic xhigh is READ_ONLY only.
+- WRITE requiring xhigh reasoning inserts READ_ONLY diagnosis before reopening a Sol/high-or-lower WRITE Gate.
+- REPLAN creates a narrower child investigation rather than replaying the same prompt.
+- Repeated identical risk floors cannot recreate the same critical cycle.
+- Matching fabricated commit aliases and worker-provided external-target flags cannot bypass the Coordinator-observed workspace HEAD.
+- `worker_done` remains lifecycle evidence only, never sufficient task-success evidence.
 
-Initial xhigh is forbidden. Capability failure moves exactly +1; a newly proven auth/security/DB/data-integrity risk may apply a separate Sol risk floor. Capability never raises filesystem authority, a logical Gate never automatically downgrades, and xhigh is the automatic ceiling with one attempt per Gate and one per run by default.
+## D. Routing Verification
 
-## D. Failure Classification Matrix
+Exact task:
 
-| Failure class | Default decision | Same-level retry | Capability escalation | Terminal condition |
-|---|---|---:|---:|---|
-| `INSUFFICIENT_SUCCESS_EVIDENCE` | `RESULT_REPAIR` / `COLLECT_EVIDENCE` | No full replay | No | Evidence remains unavailable |
-| `EVIDENCE_GAP` | `COLLECT_EVIDENCE` | Focused collection | No | Required evidence cannot be obtained |
-| `STALE_EVIDENCE` | `COLLECT_EVIDENCE` | Correct target | No | Current target unavailable |
-| `ENVIRONMENT_MISMATCH` | `COLLECT_EVIDENCE` | Correct environment | No | Correct environment unavailable |
-| `TARGET_IDENTITY_MISMATCH` | `COLLECT_EVIDENCE` | Correct target | No | Identity cannot be reconciled |
-| `TRANSIENT_FAILURE` | `RETRY_SAME_CAPABILITY` | Once with material delta | No by default | Retry budget exhausted |
-| `RECOVERABLE_IMPLEMENTATION_FAILURE` | `RETRY_SAME_CAPABILITY` | Once with material delta | Not on first failure | Repeated/no-progress failure |
-| `CAPABILITY_FAILURE` | `ESCALATE_CAPABILITY` | No identical retry | Exactly +1 | Ceiling/budget exhausted |
-| `AMBIGUOUS_FAILURE` | focused retry | Once | +1 if repeated | Ceiling/no-progress |
-| `DECOMPOSITION_FAILURE` | `REPLAN` / READ-only diagnosis | Replanned only | No first response | Safe plan unavailable |
-| `MISSING_CONTEXT` | acquire context / `BLOCKED` | No | No | Required context unavailable |
-| `EXTERNAL_BLOCKER` | `BLOCKED` | No | No | Permission/plan/service blocker persists |
-| `USER_ACTION_REQUIRED` | `BLOCKED` | No | No | User action is required |
-| `ORCHESTRATION_FAILURE` | recover or `TERMINAL` | Only with a material runtime delta | No | Safe evidence/recovery unavailable |
-| `TERMINAL_FAILURE` | `FAILED` / `BLOCKED` | No | No | Further execution has no safe value |
+`Supabase 사용량 초과 대응 및 상시 Polling 1차 최적화`
 
-## E. Success Evidence Gate
+Candidate route result:
 
-- Investigation: material conclusion, concrete evidence, checked files/tools, and unresolved questions field.
-- Assessment: risks, material impact, rollback/recovery, explicit `write_ready=true`, and no blocking uncertainty.
-- Implementation: actual diff equals both `files_modified` and `workspace_diff`; requirements, tests, strict deterministic pass results, and unexecuted verification are reported. Test results are either one accepted framework summary or all named `check: passed (detail)` entries; the forms cannot be mixed.
-- Verification: explicit `VERIFIED`; `NOT_VERIFIED`, `INCONCLUSIVE`, and `TARGET_FAILED` are distinct non-success outcomes.
-- `worker_done` settles lifecycle only. A completion word, stale target, contradictory diff, failed test, or incomplete evidence cannot produce task SUCCESS.
+- Classification: Complex.
+- Investigation: `gpt-5.6-terra / high / READ_ONLY`.
+- Implementation: `gpt-5.6-terra / high / workspace-write`.
+- Verifier: conditional.
+- Initial Sol/high: no.
+- Initial Sol/xhigh: no.
 
-## F. Logical Gate and Attempt Trace
+## E. Tests and Benchmark
 
-1. Repeated `NOT_VERIFIED`: verification focused retry, repeated ambiguity, verification capability +1, then resolution; successful assessment/WRITE Gates are not replayed.
-2. Permission/plan limitation: `EXTERNAL_BLOCKER` → `BLOCKED`; capability rank unchanged.
-3. Assessment SUCCESS + Implementation SUCCESS + Verification failure: only Verification reruns.
-4. Concrete verifier `TARGET_FAILED`: prior Implementation Gate is explicitly invalidated/reopened, fixed, then freshly verified.
-5. Sol/high unresolved with qualifying ambiguity/data-integrity evidence: budget and ceiling checks permit exactly one Sol/xhigh attempt.
-6. Implementation/deployment commit mismatch: `TARGET_IDENTITY_MISMATCH` → correct target collection → verification, with no model escalation.
-7. Complex low-risk WRITE with sufficient deterministic tests: `DETERMINISTIC_ONLY`; no Fresh Verifier dispatch.
-
-Attempt traces record Gate/attempt IDs, parentage, capability rank, authority, classification/confidence, decision/reason, material delta, fingerprints, changed files, verification mode, elapsed time, and invalidation evidence. Evidence packets are bounded; raw transcripts and secrets are not carried forward.
-
-## G. Authority Verification
-
-Tests exercise `Terra/high READ_ONLY → Sol/medium READ_ONLY → Sol/high READ_ONLY → Sol/xhigh READ_ONLY`. Authority remains READ_ONLY at every capability rank. WRITE ownership remains a fenced Lead Gate; no second mutation attempt begins while its predecessor is active. `danger-full-access` has no automatic route.
-
-## H. Korean/English Equivalence
-
-| Meaning | English/Korean result |
-|---|---|
-| Inventory / 목록 조사 | Luna/low, READ_ONLY |
-| Local validation helper implementation / 로컬 검증 헬퍼 구현 | Terra/medium, workspace-write |
-| Async retry/timeout integration / 비동기 재시도·타임아웃 연동 | Terra/high |
-| Ordinary authorization assessment / 일반 권한 영향 분석 | Sol/medium, READ_ONLY assessment |
-| Concrete destructive rollback risk / 파괴적 변경·롤백 불확실 | Sol/high with concrete reason |
-
-Korean and English negations such as “do not modify the database”, “authentication is out of scope”, and “inspect without changing files” do not create WRITE or Critical positive signals.
-
-## I. xhigh Smoke Test
-
-- Actual Codex READ_ONLY smoke: `gpt-5.6-sol`, `model_reasoning_effort=xhigh`.
-- Result: `XHIGH_READ_ONLY_OK`.
-- Usage observed: input 15,252; cached input 9,984; output 9. No filesystem authority increase occurred.
-- Unsupported xhigh terminates at Sol/high; it never falls through to max or an arbitrary model.
-
-## J. Tests
-
-- Final unit/contract suite: 177/177 PASS.
-- Compile/static checks: PASS.
-- Shell syntax: PASS.
+- Final unit/contract suite: 217/217 PASS.
+- `compileall`: PASS.
+- Installer shell syntax: PASS.
 - `git diff --check`: PASS.
-- Orca payload contract: PASS for worker_done, escalation, question, timeout with/without evidence, permission denial, plan limitation, placement failure, cleanup failure, and trusted-relay marker shapes.
-- Fixture provenance: two sanitized actual Orca captures plus deterministic synthetic edge cases; synthetic cases are explicitly labeled and not represented as production captures.
-- State-machine invariants: PASS for monotonic capability, finite attempts, xhigh ceiling/budget, no duplicate successful WRITE, mutation fencing, authority independence, external-blocker no-escalation, final-WRITE verification freshness, and no identical retry.
+- Benchmark: PASS; false success, duplicate successful WRITE, external/transient escalation, identical retry, authority auto-escalation, initial xhigh, xhigh WRITE, and repeated risk-floor loop are all zero.
+- Failure injection contracts: repeated transient, question, permission/plan limitation, insufficient evidence, and cleanup failure all fail closed with no capability escalation.
+- PR #25 and PR #26 each passed GitHub `quality-gate` before merge.
 
-## K. Cost and Quality Benchmark
+## F. Independent Verification
 
-| Policy | Verified success | False success | Workers/attempts | Compute proxy | Cost / verified success |
-|---|---:|---:|---:|---:|---:|
-| v0.1 modeled | 61.54% | 1 | 13/13 | 26 | 3.25 |
-| all-Sol/medium modeled | 92.31% | 0 | 23/23 | 92 | 7.67 |
-| v0.2 deterministic corpus replay | 92.31% | 0 | 23/23 | 58 | 4.83 |
+- Independent model: `gpt-5.6-sol / high / READ_ONLY`.
+- Final code verdict: PASS.
+- Adversarial checks covered fabricated Git identities, external-target flags, alias contradictions, repair carry-forward, blocking verification, transient handling, full ladder, xhigh READ_ONLY, REPLAN, risk-floor lineage, authority, worker fencing, and cleanup.
+- Live readiness follow-up verified exact terminal-handle binding; mismatched or missing handles fail closed, do not dispatch, and close only the created terminal.
 
-v0.2 retained v0.1 Routine/Standard initial routes and added zero happy-path LLM dispatches. Duplicate successful WRITE, external-blocker escalation, identical retry, authority auto-escalation, and Routine/Standard initial xhigh were all zero. v0.2 matched all-Sol verified quality at 36.96% lower normalized compute. Token usage was unavailable for the deterministic corpus, so model/effort calls, attempts, elapsed time and normalized compute are the declared proxy; the actual xhigh smoke reports available token usage separately.
+## G. xhigh Smoke
 
-## L. Deployment Result
+- One actual `gpt-5.6-sol / xhigh / READ_ONLY` Codex smoke was executed.
+- Result: PASS; branch `main` and HEAD `0a0b60e1851fc41c09a7add4dcd9cb276d865bc1` were reported without modification.
+- Usage: 30,802 input tokens, 25,088 cached input tokens, 124 output tokens.
+- No WRITE authority, max fallback, or external mutation was used.
 
-- Merged production code commit before this handoff: `5ef224266a2f517419e5d3c17d9e996bf2ff3cc5` (PR #22 is the final result-contract fix).
-- Installed exact commit before this handoff: `5ef224266a2f517419e5d3c17d9e996bf2ff3cc5`.
-- Package version: `0.2.0`; `/home/user/.local/bin/orca-adaptive --version` reported the same installed commit.
-- READ_ONLY pilot: PASS (`run_f09248a75193`, installed commit
-  `7033ad0872020fb63bb339b7b14041c3eb0d7c7f`), Luna/low/read-only, one
-  worker/attempt, no file changes, trusted settlement, released. This proves the
-  v0.2 READ path but is not represented as a final-commit deployment pilot.
-- Low-risk WRITE pilot: PASS (`run_1e72c8e5eafb`), Terra/medium/workspace-write, one worker/attempt, deterministic named pass evidence, trusted settlement, released; the temporary probe was removed and the tree stayed clean.
-- A broader preceding WRITE probe (`run_36ab81291fa2`) returned no safe evidence by its deadline; it was correctly classified `ORCHESTRATION_FAILURE`, not escalated, fenced and released. A materially narrower pilot then established the required WRITE production evidence.
-- Rollback: launcher switched to preserved exact snapshot `c653e299bde67d1bc3725fce18419785c3a6524d`, reported that commit, and was restored to `5ef2242`; no snapshot was deleted.
-- Post-handoff READ_ONLY pilot: PASS (`run_c03303b5a6dd`, installed/source
-  commit `7595d46f60e010bea1f8f188c9d183b0af931cd2`), Luna/low/read-only,
-  one worker/attempt, concrete `pyproject.toml` evidence, no file changes,
-  trusted settlement, released, and residual resources empty.
-- This final report-only merge is installed as an exact snapshot after merge;
-  its runtime archive is byte-identical to the verified `7595d46` code payload,
-  and local/GitHub/installed equality is rechecked before closure.
+## H. GitHub
 
-## Fresh Verifier
+- Repository: `jgkang2365-afk/orca-adaptive-routing` (PRIVATE).
+- PR #25 merge: `20bb5ade7ead75fe52473e37f242a2c6b4fdaa25`.
+- PR #26 merge: `0a0b60e1851fc41c09a7add4dcd9cb276d865bc1`.
+- Both PRs used normal merge commits after independent review and successful CI.
+- Branch protection API returned `403`: Private-repository protection requires GitHub Pro or public visibility for this account. The repository was not made public and the restriction was not bypassed.
 
-- Independent READ_ONLY verifier: PASS for the final worker-result contract.
-- Verified strict parser/prompt agreement, false-success protection, 177 tests, benchmark zero-invariants, authority independence, lifecycle settlement and cleanup regression.
-- Final post-handoff verifier: PASS on `7595d46`; 177/177 tests, static checks,
-  benchmark, exact installation, clean tree, READ_ONLY pilot evidence,
-  settlement and zero residual resources were independently confirmed.
-- Orca records the released physical Dispatch/worker as
-  `operator_close/failed`; this follows evidence-checked Task completion and
-  capability revocation, so it is release accounting rather than false task
-  success. Consumers must read Task/Runner result and terminal-resource release
-  together instead of interpreting post-release Dispatch status alone.
+## I. Candidate Installation
 
-## Git / GitHub
+- Candidate version: `0.2.1`.
+- Candidate installed commit: `0a0b60e1851fc41c09a7add4dcd9cb276d865bc1`.
+- Candidate path: `/home/user/.local/lib/orca-adaptive-routing-candidate/0a0b60e1851fc41c09a7add4dcd9cb276d865bc1`.
+- Source main, GitHub main, and candidate snapshot were equal before the handoff-only commit.
+- Production launcher was intentionally left at version `0.2.0`, commit `5d15cf58b3d9b9107a0a3a57996916ba70394b8f`.
 
-- Branch policy: feature/fix branches, independent review, merge commits; no direct `main` development.
-- Repository: `jgkang2365-afk/orca-adaptive-routing` (PRIVATE), remote `github`.
-- Pushes are normal non-force. No rebase, squash, reset, or history rewrite was used.
-- Final HEAD: the merge commit containing this handoff; local main, GitHub main and installed snapshot are made identical before closure.
+## J. Candidate Pilot and Blocker
 
-## Safety
+- Routing was correct on every attempted READ pilot: Luna/low/READ_ONLY, one logical Gate, no escalation.
+- The Runner correctly returned `ORCHESTRATION_FAILURE`; it did not report false success or escalate model capability.
+- Live failure forms:
+  - `terminal create` can return `Timed out waiting for terminal handle after creation` even when the runtime later creates a terminal.
+  - After the exact Codex update prompt is skipped, the TUI reaches idle but `terminal show` does not publish `agentIdentity`, so `worker-start` returns or is preempted by `agent_unconfigured`.
+- Manual structured evidence confirmed `blockedReason=codex-update-prompt`, successful Skip option `2`, TUI idle, and missing `agentIdentity` after boot.
+- The adapter cannot safely guess an unknown handle or treat an unbound terminal as a supervised agent.
+- Candidate READ 3/3, WRITE 3/3, Production closure pilot, and Production promotion therefore were not performed.
 
-- WSL `/home`, READ_ONLY/workspace-write sandbox policy, Critical Safety Gate, trusted relay, verifier independence and cleanup failure gate remain intact.
-- No sandbox expansion, danger-full-access, destructive Git command, remote replacement, other-project modification, credential persistence, or uncontrolled external mutation occurred.
-- Completed pilot workers were released; exact probe paths are absent and unrelated Orca resources were untouched.
+## K. Lifecycle / Cleanup
 
-## M. Remaining Limits
+- Failed Pilot Runs: `run_539de18355fa`, `run_6f5648cd8c91`, and `run_0bf644dce097`.
+- Each run had zero supervised worker resources after termination.
+- Handle-known candidate terminals were closed by the adapter.
+- Two terminals created despite handle-less diagnostic errors and the final controlled diagnostic terminal were identified by before/after inventory and closed by exact handle.
+- Final probe worker count: zero.
+- The three terminals that existed before this task were preserved; unrelated project workers and terminals were not touched.
 
-- Cross-run attempt persistence and billing-grade token accounting remain intentionally out of v0.2 scope.
-- Synthetic payload edge fixtures supplement, rather than impersonate, the two sanitized real Orca captures; future real payload shapes should be added as redacted fixtures when observed.
-- Orca/terminal transport can still fail independently of model capability. v0.2 terminates safely without escalation or false success when no trustworthy result evidence is available.
+## L. Safety
+
+- No Codex update, sandbox weakening, danger-full-access, model-to-authority escalation, force push, rebase, reset, history rewrite, public exposure, or other-project change occurred.
+- Production was not promoted after a failed candidate Gate.
+- The previous production exact snapshot and launcher remain available, so runtime rollback was not needed and no snapshot was deleted.
+- Source and GitHub code are v0.2.1; the intentionally older Production launcher is explicitly reported rather than concealed.
+
+## Remaining Issues
+
+1. Orca 1.4.192 does not reliably return the created terminal handle and does not register the freshly launched Codex 0.150.1 TUI as `agentIdentity=codex` after the update prompt is skipped.
+2. GitHub branch protection cannot be enabled for this Private repository under the current account plan.
+3. Candidate READ/WRITE repetition, Production exact installation, closure pilot, and rollback switch test remain pending behind issue 1.
 
 ## Decision Required
 
-None.
+Resolve the Orca/Codex agent-registration compatibility boundary without weakening sandboxing. Acceptable next work is an Orca runtime fix or an explicitly approved Codex runtime compatibility update followed by the withheld candidate pilots. Do not bypass `agentIdentity`, guess terminal handles, or promote Production from the current failed candidate evidence.
 
 ## Next Start Point
 
-Run the next real project task through installed `orca-adaptive run`, provide only the business objective and project constraints, and inspect the schema-v2 Gate/attempt trace only when recovery or escalation occurs.
+Reproduce the fresh-terminal `agentIdentity` failure against the supported Orca/Codex version pair, fix that runtime boundary, then resume at candidate READ_ONLY Pilot 1/3. Do not repeat v0.2.1 code stabilization, CI, benchmark, xhigh smoke, or exact Polling route validation.
