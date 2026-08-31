@@ -406,7 +406,7 @@ class OrcaAdapter:
                 "--worktree",
                 self.worktree_selector,
                 "--title",
-                f"adaptive-{route.phase.value}",
+                f"orca-adaptive:{route.phase.value}",
                 "--command",
                 codex_argv,
                 "--json",
