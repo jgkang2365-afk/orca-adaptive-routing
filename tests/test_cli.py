@@ -15,7 +15,7 @@ class CliTests(unittest.TestCase):
         with redirect_stdout(output):
             self.assertEqual(main(["--version"]), 0)
         payload = json.loads(output.getvalue())
-        self.assertEqual(payload["package_version"], "0.2.0")
+        self.assertEqual(payload["package_version"], "0.2.1")
         self.assertIn("installed_commit", payload)
         self.assertNotIn("/home/", output.getvalue())
 

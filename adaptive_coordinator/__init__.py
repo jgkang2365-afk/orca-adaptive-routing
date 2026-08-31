@@ -1,4 +1,4 @@
-"""Adaptive Coordinator v0.2 public API."""
+"""Adaptive Coordinator v0.2.1 public API."""
 
 from .models import (
     AdaptiveDecision, Authority, FailureClass, Phase, Route, RoutingPlan,

@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             version = importlib.metadata.version("orca-adaptive-routing")
         except importlib.metadata.PackageNotFoundError:
-            version = "0.2.0"
+            version = "0.2.1"
         marker = Path(__file__).resolve().parent.parent / "INSTALL_COMMIT"
         commit = marker.read_text().strip() if marker.is_file() else "source-tree"
         print(json.dumps({"package_version": version, "installed_commit": commit}, separators=(",", ":")))

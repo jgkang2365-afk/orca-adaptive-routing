@@ -16,7 +16,7 @@ from .models import (
 )
 from .orca import CoordinatorError, LifecycleSettlementError, OrcaAdapter, WorkerHandle
 from .result_sentinel import explicit_orca_failure_status, final_marked_structured_result
-from .routing import SOL, Router, apply_risk_floor, capability_at, capability_rank, next_capability
+from .routing import CAPABILITY_LADDER, SOL, Router, apply_risk_floor, capability_at, capability_rank, next_capability
 
 
 class PhaseStatus(StrEnum):
@@ -241,6 +241,25 @@ class ResultNormalizer:
 
 class SuccessEvidenceGate:
     @staticmethod
+    def _unexecuted_verification(value: Any) -> tuple[bool, str]:
+        if value in (None, [], ()):
+            return True, "no unexecuted verification"
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            return False, "unexecuted verification must be a structured list"
+        for item in value:
+            if not isinstance(item, Mapping):
+                return False, "unstructured unexecuted verification is blocking"
+            if not str(item.get("check") or "").strip():
+                return False, "unexecuted verification check is missing"
+            if not str(item.get("reason") or "").strip():
+                return False, "unexecuted verification reason is missing"
+            if item.get("blocking") is not False:
+                return False, "blocking verification remains unexecuted"
+            if item.get("deterministic_required") is True:
+                return False, "required deterministic verification remains unexecuted"
+        return True, "only justified non-blocking verification remains"
+
+    @staticmethod
     def _material_conclusion(value: Any) -> bool:
         conclusions = [item.strip().lower() for item in _strings(value) if item.strip()]
         generic = {"complete", "completed", "done", "success", "successful",
@@ -345,10 +364,20 @@ class SuccessEvidenceGate:
                 return False, "implementation evidence fields are incomplete"
             if not SuccessEvidenceGate._tests_passed(result.tests_run, result.test_results):
                 return False, "deterministic test evidence is absent, non-passing, skipped, or failed"
+            unexecuted_ok, unexecuted_reason = SuccessEvidenceGate._unexecuted_verification(
+                fields.get("unexecuted_verification"))
+            if not unexecuted_ok:
+                return False, unexecuted_reason
             return True, "implementation evidence verified"
         if route.phase is Phase.VERIFICATION:
-            return (result.verification_outcome == VerificationOutcome.VERIFIED.value,
-                    "verification requires explicit VERIFIED outcome")
+            required = (
+                result.verification_outcome == VerificationOutcome.VERIFIED.value,
+                bool(result.evidence),
+                "unresolved_questions" in fields,
+                not result.unresolved_questions,
+            )
+            return (all(required),
+                    "verification requires successful status, VERIFIED, evidence, and an explicit empty unresolved_questions list")
         return False, "unsupported phase"
 
 
@@ -393,6 +422,10 @@ class FailureClassifier:
         if result.verification_outcome == VerificationOutcome.TARGET_FAILED.value:
             return FailureClassification(FailureClass.RECOVERABLE_IMPLEMENTATION_FAILURE, "high", "verified_target_defect", result.evidence)
         if result.verification_outcome in {VerificationOutcome.INCONCLUSIVE.value, VerificationOutcome.NOT_VERIFIED.value}:
+            if (route.model == SOL and route.effort == "high"
+                    and len(result.evidence) >= 2 and bool(result.unresolved_questions)):
+                return FailureClassification(FailureClass.AMBIGUOUS_FAILURE, "high",
+                                             "conflicting_evidence", result.evidence)
             return FailureClassification(FailureClass.AMBIGUOUS_FAILURE, "high", "verification_inconclusive", result.evidence)
         if error_code in cls.ORCHESTRATION_ERROR_CODES or any(marker in text for marker in cls.ORCHESTRATION):
             return FailureClassification(FailureClass.ORCHESTRATION_FAILURE, "high", "runtime_error", (text[:500],))
@@ -429,15 +462,26 @@ class FailureClassifier:
             return FailureClassification(kind, "medium", "structured_failure_status", (text[:500],))
         if mode == "timeout" and not result.summary:
             return FailureClassification(FailureClass.EVIDENCE_GAP, "high", "timeout_without_evidence")
+        if route.phase is Phase.IMPLEMENTATION:
+            pending = result.fields.get("unexecuted_verification")
+            if isinstance(pending, Sequence) and not isinstance(pending, (str, bytes, bytearray)):
+                structured = [item for item in pending if isinstance(item, Mapping)]
+                if any(item.get("deterministic_required") is True for item in structured):
+                    return FailureClassification(FailureClass.EVIDENCE_GAP, "high",
+                                                 "deterministic_verification_required", (evidence_reason,))
+                if any(item.get("blocking") is True for item in structured):
+                    return FailureClassification(FailureClass.EVIDENCE_GAP, "high",
+                                                 "semantic_verification_required", (evidence_reason,))
         return FailureClassification(FailureClass.INSUFFICIENT_SUCCESS_EVIDENCE, "high", "success_evidence_gate", (evidence_reason,))
 
 
 class DecisionEngine:
     def __init__(self, *, same_level_retry_limit: int = 1, max_xhigh_attempts_per_gate: int = 1,
-                 max_xhigh_attempts_per_run: int = 1) -> None:
+                 max_xhigh_attempts_per_run: int = 1, evidence_repair_limit: int = 1) -> None:
         self.same_level_retry_limit = same_level_retry_limit
         self.max_xhigh_attempts_per_gate = max_xhigh_attempts_per_gate
         self.max_xhigh_attempts_per_run = max_xhigh_attempts_per_run
+        self.evidence_repair_limit = evidence_repair_limit
 
     def decide(self, gate: LogicalGateState, route: Route, failure: FailureClassification,
                *, material_new_evidence: bool, run_xhigh_count: int) -> tuple[AdaptiveDecision, str]:
@@ -450,7 +494,7 @@ class DecisionEngine:
                     FailureClass.STALE_EVIDENCE, FailureClass.ENVIRONMENT_MISMATCH,
                     FailureClass.TARGET_IDENTITY_MISMATCH}:
             rank = capability_rank(route)
-            if gate.same_level_retries.get(rank, 0) >= self.same_level_retry_limit or gate.no_progress_count >= 1:
+            if gate.evidence_repairs >= self.evidence_repair_limit or gate.no_progress_count >= 1:
                 return AdaptiveDecision.TERMINAL, "evidence repair budget exhausted without verified success"
             return AdaptiveDecision.COLLECT_EVIDENCE, "obtain correct evidence before escalation"
         if kind is FailureClass.DECOMPOSITION_FAILURE:
@@ -460,9 +504,29 @@ class DecisionEngine:
         if route.authority is Authority.WORKSPACE_WRITE and kind not in {
             FailureClass.RECOVERABLE_IMPLEMENTATION_FAILURE, FailureClass.TRANSIENT_FAILURE,
         }:
+            wants_xhigh_diagnosis = (
+                route.model == SOL and route.effort == "high"
+                and failure.confidence == "high"
+                and failure.reason_code in {
+                    "verified_capability_limit", "conflicting_evidence",
+                    "production_root_cause_unresolved",
+                }
+                and bool(failure.evidence)
+            )
+            gate_xhigh = sum(a.effort == "xhigh" for a in gate.attempts)
+            if (wants_xhigh_diagnosis and gate_xhigh < self.max_xhigh_attempts_per_gate
+                    and run_xhigh_count < self.max_xhigh_attempts_per_run):
+                return (AdaptiveDecision.INSERT_READ_ONLY_DIAGNOSIS,
+                        "Sol/xhigh READ_ONLY diagnosis required before reopening Sol/high WRITE")
             return AdaptiveDecision.INSERT_READ_ONLY_DIAGNOSIS, "non-trivial WRITE failure requires READ_ONLY diagnosis"
         rank = capability_rank(route)
         retries = gate.same_level_retries.get(rank, 0)
+        if kind is FailureClass.TRANSIENT_FAILURE:
+            if not material_new_evidence:
+                return AdaptiveDecision.TERMINAL, "transient retry requires a material runtime delta"
+            if retries < self.same_level_retry_limit:
+                return AdaptiveDecision.RETRY_SAME_CAPABILITY, "transient retry at the same capability with runtime delta"
+            return AdaptiveDecision.TERMINAL, "repeated transient failure is not a capability failure"
         retryable = kind in {FailureClass.TRANSIENT_FAILURE, FailureClass.RECOVERABLE_IMPLEMENTATION_FAILURE,
                              FailureClass.AMBIGUOUS_FAILURE}
         if retryable and not material_new_evidence:
@@ -480,11 +544,13 @@ class DecisionEngine:
                 allowed_reason = (
                     failure.confidence == "high"
                     and failure.reason_code in {
-                        "verification_inconclusive", "verified_capability_limit",
+                        "verified_capability_limit",
                         "conflicting_evidence", "production_root_cause_unresolved",
                     }
                     and bool(failure.evidence)
                 )
+                if route.authority is not Authority.READ_ONLY:
+                    return AdaptiveDecision.INSERT_READ_ONLY_DIAGNOSIS, "Sol/xhigh is READ_ONLY; diagnose before reopening WRITE"
                 if not allowed_reason or gate_xhigh >= self.max_xhigh_attempts_per_gate or run_xhigh_count >= self.max_xhigh_attempts_per_run:
                     return AdaptiveDecision.TERMINAL, "xhigh conditions or budget not satisfied"
             return AdaptiveDecision.ESCALATE_CAPABILITY, "current capability exhausted; advance exactly one rank"
@@ -492,22 +558,40 @@ class DecisionEngine:
 
 
 class ProductionRunner:
-    """Closed-loop v0.2 Coordinator. No classifier worker is dispatched."""
+    """Closed-loop v0.2.1 Coordinator. No classifier worker is dispatched."""
 
     def __init__(self, *, router: Router | None = None, adapter_factory: AdapterFactory = OrcaAdapter,
                  timeout_ms: int = 300_000, same_level_retry_limit: int = 1,
-                 capability_escalation_limit_per_gate: int = 5, max_attempts_per_gate: int = 8,
+                 capability_escalation_limit_per_gate: int = 5, max_attempts_per_gate: int | None = None,
                  max_attempts_per_run: int = 24, max_xhigh_attempts_per_gate: int = 1,
-                 max_xhigh_attempts_per_run: int = 1, max_escalations: int | None = None) -> None:
+                 max_xhigh_attempts_per_run: int = 1, max_escalations: int | None = None,
+                 evidence_repair_limit_per_gate: int = 1,
+                 diagnosis_limit_per_gate: int = 2,
+                 capability_attempt_limit_per_gate: int | None = None,
+                 global_hard_fuse: int | None = None) -> None:
         self.router = router or Router()
         self.adapter_factory = adapter_factory
         self.timeout_ms = timeout_ms
-        self.capability_escalation_limit_per_gate = capability_escalation_limit_per_gate
-        self.max_attempts_per_gate = max_attempts_per_gate
-        self.max_attempts_per_run = max_attempts_per_run
+        self.capability_attempt_limit_per_gate = (capability_attempt_limit_per_gate
+                                                  if capability_attempt_limit_per_gate is not None
+                                                  else capability_escalation_limit_per_gate)
+        # Backward-compatible public attribute retained for existing consumers.
+        self.capability_escalation_limit_per_gate = self.capability_attempt_limit_per_gate
+        self.evidence_repair_limit_per_gate = evidence_repair_limit_per_gate
+        self.same_level_retry_limit_per_gate = same_level_retry_limit
+        self.diagnosis_limit_per_gate = diagnosis_limit_per_gate
+        # The fuse is derived from legal policy budgets so it cannot silently
+        # truncate the six-rank capability ladder. An explicit override remains
+        # available for compatibility and deterministic tests.
+        derived_gate_fuse = (len(CAPABILITY_LADDER) + evidence_repair_limit_per_gate
+                             + same_level_retry_limit + diagnosis_limit_per_gate + 2)
+        self.max_attempts_per_gate = max_attempts_per_gate or derived_gate_fuse
+        self.global_hard_fuse = global_hard_fuse or max_attempts_per_run
+        self.max_attempts_per_run = self.global_hard_fuse
         self.engine = DecisionEngine(same_level_retry_limit=same_level_retry_limit,
             max_xhigh_attempts_per_gate=max_xhigh_attempts_per_gate,
-            max_xhigh_attempts_per_run=max_xhigh_attempts_per_run)
+            max_xhigh_attempts_per_run=max_xhigh_attempts_per_run,
+            evidence_repair_limit=evidence_repair_limit_per_gate)
 
     def run(self, task: str, workspace: str | Path) -> RunResult:
         started = time.monotonic()
@@ -535,6 +619,8 @@ class ProductionRunner:
         while queue and result.cost_metrics.attempt_count < self.max_attempts_per_run:
             route, gate_id = queue.pop(0)
             gate = result.logical_gates.setdefault(gate_id, LogicalGateState(gate_id, route.phase.value, route.authority.value))
+            if gate.root_gate_id is None:
+                gate.root_gate_id = gate_id
             if gate.status == "SUCCESS":
                 continue
             if len(gate.attempts) >= self.max_attempts_per_gate:
@@ -560,6 +646,7 @@ class ProductionRunner:
             # attempt first would hide the prior failure/diff at attempts[-1].
             prior_packet = self._evidence_packet(gate)
             gate.attempts.append(attempt)
+            gate.capability_ranks_used.add(capability_rank(route))
             if route.authority is Authority.WORKSPACE_WRITE:
                 gate.active_mutation_attempt = attempt_id
             phase = PhaseResult(route.phase.value, route.role, route.model, route.effort, route.authority.value,
@@ -572,6 +659,18 @@ class ProductionRunner:
             diagnosis_no_progress = False
             lifecycle_settled = False
             try:
+                if route.phase is Phase.VERIFICATION and not gate.evidence_source_gate_id:
+                    source_gate = next((candidate for candidate in reversed(tuple(result.logical_gates.values()))
+                                        if candidate.phase == Phase.IMPLEMENTATION.value
+                                        and candidate.status == "SUCCESS"), None)
+                    if source_gate:
+                        gate.evidence_source_gate_id = source_gate.logical_gate_id
+                if route.phase is Phase.VERIFICATION:
+                    target_source = next((candidate for candidate in reversed(tuple(result.logical_gates.values()))
+                                          if candidate.phase == Phase.IMPLEMENTATION.value
+                                          and candidate.status == "SUCCESS"), None)
+                    if target_source:
+                        gate.target_source_gate_id = target_source.logical_gate_id
                 evidence_source = gate.parent_gate_id or gate.evidence_source_gate_id
                 packet = (self._evidence_packet(result.logical_gates[evidence_source])
                           if evidence_source else prior_packet)
@@ -664,7 +763,21 @@ class ProductionRunner:
                 )))[:20]
                 attempt.target_fingerprint = {key: normalized.fields[key] for key in (
                     "git_head", "target_id", "deployment_id", "target_url", "implementation_commit",
-                    "deployment_commit", "verification_timestamp") if normalized.fields.get(key) is not None}
+                    "deployment_commit", "url", "verification_timestamp") if normalized.fields.get(key) is not None}
+                canonical_identity, identity_conflict = self._canonical_target_identity(
+                    normalized.fields,
+                    verifier_side=route.phase is Phase.VERIFICATION,
+                    actual_git_head=(str(fingerprint.get("git_head"))
+                                     if fingerprint.get("git_head") else None),
+                )
+                if route.phase is Phase.IMPLEMENTATION:
+                    incoming_identity = canonical_identity
+                    if incoming_identity and not identity_conflict:
+                        if route.authority is Authority.WORKSPACE_WRITE:
+                            gate.target_fingerprint.update(incoming_identity)
+                        else:
+                            for key, value in incoming_identity.items():
+                                gate.target_fingerprint.setdefault(key, value)
                 attempt.verification_mode = (str(normalized.fields.get("verification_mode"))
                                              if normalized.fields.get("verification_mode") else None)
                 phase.worker_result = normalized.public()
@@ -685,7 +798,21 @@ class ProductionRunner:
                         evidence_ok = False
                         evidence_reason = ("READ_ONLY evidence repair cannot substitute for a WRITE success; "
                                            "objective prior_mutation_succeeded evidence is required")
-                target_mismatch = self._target_mismatch(normalized.fields)
+                target_mismatch = identity_conflict or self._target_mismatch(normalized.fields)
+                if route.phase is Phase.VERIFICATION and (gate.target_source_gate_id or gate.evidence_source_gate_id):
+                    source_gate = result.logical_gates.get(
+                        gate.target_source_gate_id or gate.evidence_source_gate_id or "")
+                    source_target = source_gate.target_fingerprint if source_gate else {}
+                    verifier_target = canonical_identity
+                    for key in ("target_id", "commit", "deployment_id", "target_url"):
+                        if key in source_target:
+                            if key not in verifier_target:
+                                target_mismatch = f"verifier missing {key} for implementation target"
+                                break
+                            if str(source_target[key]) != str(verifier_target[key]):
+                                target_mismatch = (f"implementation {key}={source_target[key]} "
+                                                   f"verification {key}={verifier_target[key]}")
+                                break
                 completion_result = ResultNormalizer.normalize(completion)
                 reports_failure = (normalized.status in {"FAILED", "FAILURE", "ERROR", "BLOCKED"}
                                    or completion_result.status in {"FAILED", "FAILURE", "ERROR", "BLOCKED"}
@@ -745,7 +872,17 @@ class ProductionRunner:
                         )))[:20]
                     if failure.reason_code in {"confirmed_risk_floor", "confirmed_risk_floor_high"}:
                         floor_name = "Sol/high" if failure.reason_code.endswith("_high") else "Sol/medium"
-                        decision, reason = AdaptiveDecision.APPLY_RISK_FLOOR, f"confirmed risk applies {floor_name} floor"
+                        floor = 4 if failure.reason_code.endswith("_high") else 3
+                        signature = hashlib.sha256("\n".join(sorted(failure.evidence)).encode()).hexdigest()
+                        root_gate = result.logical_gates.get(gate.root_gate_id or gate_id, gate)
+                        if (root_gate.applied_risk_signature == signature
+                                and (root_gate.applied_floor_rank or 0) >= floor):
+                            decision, reason = (AdaptiveDecision.TERMINAL,
+                                                "identical risk floor already applied; no-progress loop blocked")
+                        else:
+                            root_gate.applied_risk_signature = signature
+                            root_gate.applied_floor_rank = max(root_gate.applied_floor_rank or 0, floor)
+                            decision, reason = AdaptiveDecision.APPLY_RISK_FLOOR, f"confirmed risk applies {floor_name} floor"
                     else:
                         decision, reason = self.engine.decide(gate, route, failure,
                             material_new_evidence=material, run_xhigh_count=run_xhigh_count)
@@ -754,7 +891,7 @@ class ProductionRunner:
                         for prior in gate.attempts[:-1]
                     )
                     if (decision is AdaptiveDecision.ESCALATE_CAPABILITY
-                            and prior_escalations >= self.capability_escalation_limit_per_gate):
+                            and prior_escalations >= self.capability_attempt_limit_per_gate):
                         decision, reason = AdaptiveDecision.TERMINAL, "capability escalation budget exhausted"
                     attempt.failure_class = failure.failure_class.value
                     attempt.classification_confidence = failure.confidence
@@ -803,10 +940,12 @@ class ProductionRunner:
                             verification_id = f"{gate_id}-risk-verification"
                             result.logical_gates.setdefault(assessment_id, LogicalGateState(
                                 assessment_id, Phase.ASSESSMENT.value, Authority.READ_ONLY.value,
-                                evidence_source_gate_id=gate_id))
+                                evidence_source_gate_id=gate_id,
+                                root_gate_id=gate.root_gate_id or gate_id))
                             result.logical_gates.setdefault(verification_id, LogicalGateState(
                                 verification_id, Phase.VERIFICATION.value, Authority.READ_ONLY.value,
-                                evidence_source_gate_id=gate_id))
+                                evidence_source_gate_id=gate_id,
+                                root_gate_id=gate.root_gate_id or gate_id))
                             queue.insert(0, (verifier, verification_id))
                             queue.insert(0, (implementation, gate_id))
                             queue.insert(0, (assessment, assessment_id))
@@ -815,10 +954,55 @@ class ProductionRunner:
                             result.verification_mode = VerificationMode.HYBRID.value
                             result.verifier_required_reason = "new Critical risk discovered during WRITE"
                         else:
-                            queue.insert(0, (apply_risk_floor(route, floor), gate_id))
+                            pending_write = any(queued_route.authority is Authority.WORKSPACE_WRITE
+                                                for queued_route, _ in queue)
+                            if pending_write:
+                                assessment_approved = False
+                                model, effort = capability_at(floor)
+                                protected_queue: list[tuple[Route, str]] = []
+                                has_verifier = False
+                                for queued_route, queued_gate in queue:
+                                    if queued_route.authority is Authority.WORKSPACE_WRITE:
+                                        queued_route = replace(
+                                            apply_risk_floor(queued_route, floor),
+                                            requires_assessment=True)
+                                    elif queued_route.phase is Phase.VERIFICATION:
+                                        queued_route = replace(apply_risk_floor(queued_route, floor),
+                                                               authority=Authority.READ_ONLY,
+                                                               approval_grade="SAFE")
+                                        has_verifier = True
+                                    protected_queue.append((queued_route, queued_gate))
+                                queue[:] = protected_queue
+                                assessment_id = f"{gate_id}-risk-assessment"
+                                result.logical_gates.setdefault(assessment_id, LogicalGateState(
+                                    assessment_id, Phase.ASSESSMENT.value, Authority.READ_ONLY.value,
+                                    evidence_source_gate_id=gate_id,
+                                    root_gate_id=gate.root_gate_id or gate_id))
+                                queue.insert(0, (Route(Phase.ASSESSMENT, "Risk Assessor", model, effort,
+                                                       Authority.READ_ONLY, "SAFE"), assessment_id))
+                                if not has_verifier:
+                                    verification_id = f"{gate_id}-risk-verification"
+                                    result.logical_gates.setdefault(verification_id, LogicalGateState(
+                                        verification_id, Phase.VERIFICATION.value,
+                                        Authority.READ_ONLY.value, evidence_source_gate_id=gate_id,
+                                        root_gate_id=gate.root_gate_id or gate_id))
+                                    queue.append((Route(Phase.VERIFICATION, "Fresh Verifier", model, effort,
+                                                        Authority.READ_ONLY, "SAFE"), verification_id))
+                                result.classification = "critical"
+                                result.verification_decision = "required"
+                                result.verification_mode = VerificationMode.HYBRID.value
+                                result.verifier_required_reason = "new Critical risk discovered before pending WRITE"
+                                # The investigation produced a concrete risk finding and is
+                                # replaced by the stronger phase-separated Critical plan.
+                                gate.status = "SUCCESS"
+                                completed_phases.add(route.phase)
+                            else:
+                                queue.insert(0, (apply_risk_floor(route, floor), gate_id))
                     else:
                         self._schedule_decision(queue, route, gate_id, gate, decision, result, normalized)
-                    if decision is AdaptiveDecision.ESCALATE_CAPABILITY and next_capability(route).effort == "xhigh":
+                    if ((decision is AdaptiveDecision.ESCALATE_CAPABILITY and next_capability(route).effort == "xhigh")
+                            or (decision is AdaptiveDecision.INSERT_READ_ONLY_DIAGNOSIS
+                                and "Sol/xhigh READ_ONLY" in reason)):
                         run_xhigh_count += 1
                     if decision in {AdaptiveDecision.BLOCKED, AdaptiveDecision.TERMINAL}:
                         gate.status = decision.value
@@ -957,7 +1141,10 @@ class ProductionRunner:
             Phase.ASSESSMENT: "risks, impact, rollback, write_ready, unresolved_questions",
             Phase.IMPLEMENTATION: (
                 "files_modified, requirements_completed, tests_run, test_results, unexecuted_verification, "
-                "workspace_diff. test_results must use exactly one of two non-mixing forms: (A) a one-entry list "
+                "workspace_diff. unexecuted_verification must be [] when complete; otherwise each entry must be "
+                "{check, blocking, reason}. String entries, missing reasons, blocking=true, and an unexecuted "
+                "deterministic_required check block SUCCESS. A model review cannot replace an executable "
+                "deterministic check. test_results must use exactly one of two non-mixing forms: (A) a one-entry list "
                 "containing only PASS/PASSED/OK/SUCCESS, status/result/outcome: passed, all tests passed, "
                 "`N passed`, `N passed in Ns`, `N passed, M warnings in Ns`, `Tests: N passed, N total`, or "
                 "`N passed (N)`; or (B) one or more entries all exactly "
@@ -968,8 +1155,10 @@ class ProductionRunner:
             Phase.VERIFICATION: "verification_outcome (VERIFIED, NOT_VERIFIED, INCONCLUSIVE, TARGET_FAILED), evidence, unresolved_questions",
         }[route.phase]
         packet = json.dumps(evidence.to_dict(), ensure_ascii=False, separators=(",", ":")) if evidence else "{}"
+        gate_directives = json.dumps(gate.verified_facts, ensure_ascii=False, separators=(",", ":")) if gate else "[]"
         return (f"User task:\n{task}\n\nAssigned logical gate: {gate.logical_gate_id if gate else route.phase.value}; "
                 f"phase: {route.phase.value}; role: {route.role}; authority: {route.authority.value}. "
+                f"Gate-specific bounded directives: {gate_directives}. "
                 "Read AGENTS.md. Do only this gate; do not spawn workers. Construct one complete result object first, "
                 f"including status, summary and: {contract}. The summary string itself must be exactly three sentences. "
                 f"Evidence packet (bounded input; do not echo it as an output field): {packet}. Report escalation "
@@ -1010,6 +1199,45 @@ class ProductionRunner:
         if expected and actual and expected != actual:
             return f"implementation_commit={expected} deployment_commit={actual}"
         return None
+
+    @staticmethod
+    def _canonical_target_identity(
+        fields: Mapping[str, Any], *, verifier_side: bool,
+        actual_git_head: str | None = None,
+    ) -> tuple[dict[str, object], str | None]:
+        identity: dict[str, object] = {}
+        for key in ("target_id", "deployment_id"):
+            if fields.get(key) is not None:
+                identity[key] = fields[key]
+        url_values = [str(fields[key]) for key in ("target_url", "url")
+                      if fields.get(key) is not None]
+        if len(set(url_values)) > 1:
+            return identity, (f"contradictory target URL aliases: "
+                              f"target_url={fields.get('target_url')} url={fields.get('url')}")
+        url = url_values[0] if url_values else None
+        if url is not None:
+            identity["target_url"] = url
+        commit_aliases = ["implementation_commit", "deployment_commit", "git_head"]
+        commit_values = [(key, str(fields[key])) for key in commit_aliases
+            if fields.get(key) is not None]
+        if len({value for _, value in commit_values}) > 1:
+            rendered = " ".join(f"{key}={value}" for key, value in commit_values)
+            return identity, f"contradictory commit identity aliases: {rendered}"
+        if actual_git_head is not None:
+            mismatched = [(key, value) for key, value in commit_values
+                          if value != actual_git_head]
+            if mismatched:
+                rendered = " ".join(f"{key}={value}" for key, value in mismatched)
+                return identity, (f"reported commit identity does not match actual workspace "
+                                  f"git_head={actual_git_head}: {rendered}")
+        commit_order = (("deployment_commit", "implementation_commit", "git_head")
+                        if verifier_side else
+                        ("implementation_commit", "deployment_commit", "git_head"))
+        for key in commit_order:
+            if fields.get(key) is not None:
+                identity["commit"] = fields[key]
+                break
+        return identity, None
 
     @staticmethod
     def _non_idempotent_intent(task: str) -> bool:
@@ -1064,15 +1292,63 @@ class ProductionRunner:
                            gate: LogicalGateState, decision: AdaptiveDecision, result: RunResult,
                            normalized: NormalizedWorkerResult) -> None:
         if decision in {AdaptiveDecision.COLLECT_EVIDENCE, AdaptiveDecision.RESULT_REPAIR,
-                        AdaptiveDecision.RETRY_SAME_CAPABILITY, AdaptiveDecision.REPLAN}:
+                        AdaptiveDecision.RETRY_SAME_CAPABILITY}:
             rank = capability_rank(route)
-            gate.same_level_retries[rank] = gate.same_level_retries.get(rank, 0) + 1
+            if decision in {AdaptiveDecision.COLLECT_EVIDENCE, AdaptiveDecision.RESULT_REPAIR}:
+                gate.evidence_repairs += 1
+            else:
+                gate.same_level_retries[rank] = gate.same_level_retries.get(rank, 0) + 1
             repair_route = route
             if (decision in {AdaptiveDecision.COLLECT_EVIDENCE, AdaptiveDecision.RESULT_REPAIR}
                     and route.authority is Authority.WORKSPACE_WRITE):
                 repair_route = replace(route, role="Result Evidence Collector", authority=Authority.READ_ONLY,
                                        approval_grade="SAFE", requires_assessment=False)
             queue.insert(0, (repair_route, gate_id))
+            pending = normalized.fields.get("unexecuted_verification")
+            semantic_review = (
+                route.phase is Phase.IMPLEMENTATION
+                and isinstance(pending, Sequence)
+                and not isinstance(pending, (str, bytes, bytearray))
+                and any(isinstance(item, Mapping) and item.get("blocking") is True
+                        and item.get("deterministic_required") is not True for item in pending)
+            )
+            if semantic_review:
+                verifier_no = 1 + sum(key.startswith(f"{gate_id}-semantic-verification-")
+                                      for key in result.logical_gates)
+                verifier_id = f"{gate_id}-semantic-verification-{verifier_no}"
+                result.logical_gates[verifier_id] = LogicalGateState(
+                    verifier_id, Phase.VERIFICATION.value, Authority.READ_ONLY.value,
+                    parent_gate_id=gate_id, evidence_source_gate_id=gate_id,
+                    root_gate_id=gate.root_gate_id or gate_id)
+                result.logical_gates[verifier_id].verified_facts.extend(
+                    f"pending_check: {item.get('check')} | reason: {item.get('reason')}"
+                    for item in pending if isinstance(item, Mapping) and item.get("blocking") is True)
+                queue.insert(0, (_fresh_verifier(), verifier_id))
+                result.verification_decision = "model-review-selected"
+                result.verification_mode = VerificationMode.MODEL_REVIEW.value
+                result.verifier_required_reason = "blocking semantic verification remains"
+        elif decision is AdaptiveDecision.REPLAN:
+            gate.diagnosis_count += 1
+            if gate.diagnosis_count > self.diagnosis_limit_per_gate:
+                gate.status = "TERMINAL"
+                return
+            focused = replace(route, phase=Phase.INVESTIGATION, role="Focused Replan Investigator",
+                              authority=Authority.READ_ONLY, approval_grade="SAFE",
+                              requires_assessment=False)
+            child_id = f"{gate_id}-replan-{gate.diagnosis_count}"
+            child = LogicalGateState(child_id, Phase.INVESTIGATION.value, Authority.READ_ONLY.value,
+                                     parent_gate_id=gate_id,
+                                     root_gate_id=gate.root_gate_id or gate_id)
+            child.verified_facts.extend((
+                "replan_reason: decomposition failure",
+                "narrowed_question: resolve the latest unresolved question only",
+                "excluded_scope: do not repeat the original broad strategy",
+                "required_evidence: concrete files, tools, and bounded conclusion",
+                "non_repeat_strategy: use a narrower READ_ONLY investigation",
+            ))
+            result.logical_gates[child_id] = child
+            queue.insert(0, (route, gate_id))
+            queue.insert(0, (focused, child_id))
         elif decision is AdaptiveDecision.ESCALATE_CAPABILITY:
             advanced = next_capability(route)
             if advanced:
@@ -1081,13 +1357,17 @@ class ProductionRunner:
         elif decision is AdaptiveDecision.APPLY_RISK_FLOOR:
             queue.insert(0, (apply_risk_floor(route, 3), gate_id))
         elif decision is AdaptiveDecision.INSERT_READ_ONLY_DIAGNOSIS:
-            diagnostic = replace(route, phase=Phase.INVESTIGATION, role="Failure Diagnostician", authority=Authority.READ_ONLY,
+            gate.diagnosis_count += 1
+            use_xhigh = bool(gate.attempts and "Sol/xhigh READ_ONLY" in (gate.attempts[-1].decision_reason or ""))
+            diagnostic_base = next_capability(route) if use_xhigh else route
+            diagnostic = replace(diagnostic_base or route, phase=Phase.INVESTIGATION,
+                                 role="Failure Diagnostician", authority=Authority.READ_ONLY,
                                  approval_grade="SAFE", requires_assessment=False)
             diagnosis_no = 1 + sum(key.startswith(f"{gate_id}-diagnosis-") for key in result.logical_gates)
             diagnosis_id = f"{gate_id}-diagnosis-{diagnosis_no}"
             result.logical_gates[diagnosis_id] = LogicalGateState(
                 diagnosis_id, Phase.INVESTIGATION.value, Authority.READ_ONLY.value,
-                parent_gate_id=gate_id)
+                parent_gate_id=gate_id, root_gate_id=gate.root_gate_id or gate_id)
             queue.insert(0, (route, gate_id))
             queue.insert(0, (diagnostic, diagnosis_id))
         elif decision is AdaptiveDecision.REOPEN_IMPLEMENTATION:
@@ -1107,6 +1387,8 @@ class ProductionRunner:
                                        Authority.WORKSPACE_WRITE, "REVIEW", requires_assessment=False)
             if implementation_gate in result.logical_gates:
                 result.logical_gates[implementation_gate].status = "PENDING"
+            queue[:] = [(queued_route, queued_gate) for queued_route, queued_gate in queue
+                        if queued_gate != implementation_gate]
             queue.insert(0, (route, gate_id))
             queue.insert(0, (implementation, implementation_gate))
 

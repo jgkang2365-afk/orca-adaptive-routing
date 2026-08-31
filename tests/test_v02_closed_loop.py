@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import subprocess
+import tempfile
 import unittest
 import zlib
 from dataclasses import replace
@@ -10,6 +12,7 @@ from pathlib import Path
 
 from adaptive_coordinator.models import (
     AdaptiveDecision, Authority, FailureClass, LogicalGateState, Phase, Route,
+    VerificationMode,
 )
 from adaptive_coordinator.orca import CoordinatorError, OrcaAdapter, WorkerHandle
 from adaptive_coordinator.routing import (
@@ -666,6 +669,20 @@ class ProductionClosedLoopTests(unittest.TestCase):
     def run_with(self, task, adapter):
         return ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(task, "/home/user/project")
 
+    def git_workspace(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.invalid"], check=True)
+        (root / "README.md").write_text("fixture\n")
+        subprocess.run(["git", "-C", str(root), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+        head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], check=True,
+                              capture_output=True, text=True).stdout.strip()
+        return root, head
+
     def test_happy_paths_have_no_additional_dispatch(self):
         for task, expected in (("Inspect metadata. Do not modify files.", 1),
                                ("Implement a validation helper.", 1)):
@@ -763,6 +780,167 @@ class ProductionClosedLoopTests(unittest.TestCase):
         self.assertEqual(len(adapter.routes), 2)
         self.assertNotIn("ESCALATE_CAPABILITY", [d["decision"] for d in result.adaptive_decisions])
 
+    def test_evidence_repair_does_not_consume_first_ambiguous_retry(self):
+        adapter = ClosedLoopAdapter({"investigation": [
+            {"status": "completed", "summary": "report incomplete"},
+            {"status": "failed", "summary": "evidence remains ambiguous",
+             "failure_class_hint": "AMBIGUOUS_FAILURE", "evidence": ["new focused log"]},
+            evidence(Phase.INVESTIGATION),
+        ]})
+        result = self.run_with("Inspect metadata. Do not modify files.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual([item["decision"] for item in result.adaptive_decisions], [
+            "COLLECT_EVIDENCE", "RETRY_SAME_CAPABILITY", "SUCCESS"])
+        self.assertEqual([item.effort for item in adapter.routes], ["low", "low", "low"])
+
+    def test_critical_verifier_is_bound_to_implementation_target_identity(self):
+        adapter = ClosedLoopAdapter({
+            "implementation": [evidence(Phase.IMPLEMENTATION, target_id="prod-A")],
+            "verification": [
+                evidence(Phase.VERIFICATION, target_id="prod-B"),
+                evidence(Phase.VERIFICATION, target_id="prod-B"),
+            ],
+        })
+        result = self.run_with("Implement a reversible database migration.", adapter)
+        self.assertIsNot(result.final_status, PhaseStatus.SUCCESS)
+        verification = [item for item in result.adaptive_decisions
+                        if item["logical_gate_id"].startswith("verification")]
+        self.assertTrue(verification)
+        self.assertTrue(all(item["failure_class"] == "TARGET_IDENTITY_MISMATCH"
+                            for item in verification))
+        self.assertEqual(result.logical_gates["verification-3"].evidence_source_gate_id,
+                         "implementation-2")
+
+    def test_critical_verifier_canonicalizes_commit_identity_aliases(self):
+        for verifier_field in ("deployment_commit", "implementation_commit"):
+            with self.subTest(verifier_field=verifier_field):
+                verifier = evidence(Phase.VERIFICATION, **{verifier_field: "sha-B"})
+                adapter = ClosedLoopAdapter({
+                    "implementation": [evidence(
+                        Phase.IMPLEMENTATION, implementation_commit="sha-A")],
+                    "verification": [verifier, verifier],
+                })
+                result = self.run_with("Implement a reversible database migration.", adapter)
+                self.assertIsNot(result.final_status, PhaseStatus.SUCCESS)
+                failures = [item for item in result.adaptive_decisions
+                            if item["failure_class"] == "TARGET_IDENTITY_MISMATCH"]
+                self.assertTrue(failures)
+
+    def test_verifier_rejects_contradictory_commit_and_url_aliases(self):
+        cases = (
+            {"deployment_commit": "sha-A", "git_head": "sha-B"},
+            {"target_url": "https://target-a.example", "url": "https://target-b.example"},
+        )
+        for verifier_fields in cases:
+            with self.subTest(verifier_fields=verifier_fields):
+                verifier = evidence(Phase.VERIFICATION, **verifier_fields)
+                adapter = ClosedLoopAdapter({
+                    "implementation": [evidence(
+                        Phase.IMPLEMENTATION, implementation_commit="sha-A",
+                        target_url="https://target-a.example")],
+                    "verification": [verifier, verifier],
+                })
+                result = self.run_with("Implement a reversible database migration.", adapter)
+                self.assertIsNot(result.final_status, PhaseStatus.SUCCESS)
+                self.assertIn("TARGET_IDENTITY_MISMATCH",
+                              [item["failure_class"] for item in result.adaptive_decisions])
+
+    def test_fake_reported_git_head_cannot_override_actual_workspace_head(self):
+        fake = "0" * 40
+        adapter = ClosedLoopAdapter({
+            "implementation": [evidence(Phase.IMPLEMENTATION, git_head=fake)],
+            "verification": [evidence(Phase.VERIFICATION, git_head=fake)],
+        })
+        result = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(
+            "Implement a reversible database migration.",
+            "/home/user/projects/orca-adaptive-routing",
+        )
+        self.assertIsNot(result.final_status, PhaseStatus.SUCCESS)
+        self.assertIn("TARGET_IDENTITY_MISMATCH",
+                      [item["failure_class"] for item in result.adaptive_decisions])
+
+    def test_consistent_commit_and_url_aliases_pass(self):
+        adapter = ClosedLoopAdapter({
+            "implementation": [evidence(
+                Phase.IMPLEMENTATION, implementation_commit="sha-A",
+                deployment_commit="sha-A", target_url="https://target.example",
+                url="https://target.example")],
+            "verification": [evidence(
+                Phase.VERIFICATION, implementation_commit="sha-A",
+                deployment_commit="sha-A", target_url="https://target.example",
+                url="https://target.example")],
+        })
+        result = self.run_with("Implement a reversible database migration.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+
+    def test_matching_fabricated_commit_aliases_fail_against_actual_workspace_head(self):
+        root, _ = self.git_workspace()
+        fake = "a" * 40
+        adapter = ClosedLoopAdapter({
+            "implementation": [evidence(Phase.IMPLEMENTATION, implementation_commit=fake)],
+            "verification": [evidence(Phase.VERIFICATION, deployment_commit=fake)],
+        })
+        result = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(
+            "Implement a reversible database migration.", root)
+        self.assertIsNot(result.final_status, PhaseStatus.SUCCESS)
+        self.assertIn("TARGET_IDENTITY_MISMATCH",
+                      [item["failure_class"] for item in result.adaptive_decisions])
+
+    def test_worker_external_flags_cannot_bypass_workspace_commit_provenance(self):
+        for bypass in ({"external_target": True}, {"target_scope": "external"}):
+            with self.subTest(bypass=bypass):
+                root, _ = self.git_workspace()
+                fake = "b" * 40
+                adapter = ClosedLoopAdapter({
+                    "implementation": [evidence(
+                        Phase.IMPLEMENTATION, git_head=fake, **bypass)],
+                    "verification": [evidence(
+                        Phase.VERIFICATION, git_head=fake, **bypass)],
+                })
+                result = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(
+                    "Implement a reversible database migration.", root)
+                self.assertIsNot(result.final_status, PhaseStatus.SUCCESS)
+                self.assertIn("TARGET_IDENTITY_MISMATCH",
+                              [item["failure_class"] for item in result.adaptive_decisions])
+
+    def test_actual_workspace_head_aliases_and_external_identifiers_pass(self):
+        root, head = self.git_workspace()
+        url = "https://deployment.example/target"
+        adapter = ClosedLoopAdapter({
+            "implementation": [evidence(
+                Phase.IMPLEMENTATION, implementation_commit=head, git_head=head,
+                deployment_id="deploy-1", target_url=url)],
+            "verification": [evidence(
+                Phase.VERIFICATION, deployment_commit=head, git_head=head,
+                deployment_id="deploy-1", url=url)],
+        })
+        result = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(
+            "Implement a reversible database migration.", root)
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+
+    def test_verifier_missing_prior_commit_identity_fails(self):
+        adapter = ClosedLoopAdapter({
+            "implementation": [evidence(
+                Phase.IMPLEMENTATION, implementation_commit="sha-A")],
+            "verification": [evidence(Phase.VERIFICATION), evidence(Phase.VERIFICATION)],
+        })
+        result = self.run_with("Implement a reversible database migration.", adapter)
+        self.assertIsNot(result.final_status, PhaseStatus.SUCCESS)
+        self.assertIn("TARGET_IDENTITY_MISMATCH",
+                      [item["failure_class"] for item in result.adaptive_decisions])
+
+    def test_read_only_evidence_repair_preserves_authoritative_target_identity(self):
+        adapter = ClosedLoopAdapter({"implementation": [
+            {"status": "completed", "summary": "report incomplete",
+             "implementation_commit": "sha-A"},
+            evidence(Phase.IMPLEMENTATION, prior_mutation_succeeded=True,
+                     evidence=["prior mutation and tests verified"]),
+        ]})
+        result = self.run_with("Implement a validation helper.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual(result.logical_gates["implementation-1"].target_fingerprint,
+                         {"commit": "sha-A"})
+
     def test_write_evidence_repair_does_not_repeat_mutation_authority(self):
         adapter = ClosedLoopAdapter({"implementation": [
             {"status": "completed", "summary": "report incomplete"},
@@ -772,6 +950,67 @@ class ProductionClosedLoopTests(unittest.TestCase):
         self.assertIs(result.final_status, PhaseStatus.SUCCESS)
         self.assertEqual([r.authority for r in adapter.routes],
                          [Authority.WORKSPACE_WRITE, Authority.READ_ONLY])
+
+    def test_blocking_semantic_unexecuted_check_runs_model_review_before_repair(self):
+        incomplete = evidence(Phase.IMPLEMENTATION, unexecuted_verification=[{
+            "check": "semantic policy conformance", "blocking": True,
+            "reason": "requires independent interpretation",
+        }])
+        repaired = evidence(
+            Phase.IMPLEMENTATION, prior_mutation_succeeded=True,
+            evidence=["independent verifier confirmed policy conformance"],
+        )
+        adapter = ClosedLoopAdapter({"implementation": [incomplete, repaired]})
+        result = self.run_with("Implement a validation helper.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual([(item.phase, item.authority) for item in adapter.routes], [
+            (Phase.IMPLEMENTATION, Authority.WORKSPACE_WRITE),
+            (Phase.VERIFICATION, Authority.READ_ONLY),
+            (Phase.IMPLEMENTATION, Authority.READ_ONLY),
+        ])
+        self.assertEqual(result.verification_mode, VerificationMode.MODEL_REVIEW.value)
+        self.assertIn("pending_check: semantic policy conformance", adapter.specs[1])
+        self.assertIn('"verified_facts":["unit PASS"]', adapter.specs[2])
+
+    def test_semantic_verifier_target_failed_reopens_write_without_stale_repair(self):
+        incomplete = evidence(Phase.IMPLEMENTATION, unexecuted_verification=[{
+            "check": "semantic policy conformance", "blocking": True,
+            "reason": "requires independent interpretation",
+        }])
+        adapter = ClosedLoopAdapter({
+            "implementation": [incomplete, evidence(Phase.IMPLEMENTATION)],
+            "verification": [
+                evidence(Phase.VERIFICATION, verification_outcome="TARGET_FAILED",
+                         evidence=["policy regression reproduced"]),
+                evidence(Phase.VERIFICATION),
+            ],
+        })
+        result = self.run_with("Implement a validation helper.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual([(item.phase, item.authority) for item in adapter.routes], [
+            (Phase.IMPLEMENTATION, Authority.WORKSPACE_WRITE),
+            (Phase.VERIFICATION, Authority.READ_ONLY),
+            (Phase.IMPLEMENTATION, Authority.WORKSPACE_WRITE),
+            (Phase.VERIFICATION, Authority.READ_ONLY),
+        ])
+
+    def test_required_deterministic_check_is_not_replaced_by_model_review(self):
+        incomplete = evidence(Phase.IMPLEMENTATION, unexecuted_verification=[{
+            "check": "unit test", "blocking": True, "reason": "runner unavailable",
+            "deterministic_required": True,
+        }])
+        repaired = evidence(
+            Phase.IMPLEMENTATION, prior_mutation_succeeded=True,
+            evidence=["unit runner restored and test passed"],
+        )
+        adapter = ClosedLoopAdapter({"implementation": [incomplete, repaired]})
+        result = self.run_with("Implement a validation helper.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual([(item.phase, item.authority) for item in adapter.routes], [
+            (Phase.IMPLEMENTATION, Authority.WORKSPACE_WRITE),
+            (Phase.IMPLEMENTATION, Authority.READ_ONLY),
+        ])
+        self.assertNotIn(Phase.VERIFICATION, [item.phase for item in adapter.routes])
 
     def test_read_only_repair_cannot_turn_failed_write_into_success(self):
         failure = {"status": "failed", "summary": "reasoning insufficient",
@@ -892,6 +1131,40 @@ class ProductionClosedLoopTests(unittest.TestCase):
         self.assertIn('"verified_facts":["authorization and data integrity risk discovered"]',
                       adapter.specs[1])
 
+    def test_read_only_discovered_critical_risk_protects_pending_write(self):
+        adapter = ClosedLoopAdapter({}, modes=["escalation", "worker_done", "worker_done", "worker_done"])
+        original_wait = adapter.wait_for_completion
+        def wait(run_id, worker, timeout_ms):
+            value = original_wait(run_id, worker, timeout_ms)
+            if value["mode"] == "escalation":
+                value["message"]["body"] = "authorization risk discovered"
+            return value
+        adapter.wait_for_completion = wait
+        result = self.run_with("Fix async polling state synchronization.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual([item.phase for item in adapter.routes], [
+            Phase.INVESTIGATION, Phase.ASSESSMENT, Phase.IMPLEMENTATION, Phase.VERIFICATION])
+        self.assertIs(adapter.routes[1].authority, Authority.READ_ONLY)
+        self.assertTrue(adapter.routes[2].requires_assessment)
+        self.assertIs(adapter.routes[3].authority, Authority.READ_ONLY)
+
+    def test_assessment_repeating_same_root_risk_cannot_spawn_second_cycle(self):
+        adapter = ClosedLoopAdapter({}, modes=["escalation", "escalation"])
+        original_wait = adapter.wait_for_completion
+        def wait(run_id, worker, timeout_ms):
+            value = original_wait(run_id, worker, timeout_ms)
+            if value["mode"] == "escalation":
+                value["message"]["body"] = "authorization risk discovered"
+            return value
+        adapter.wait_for_completion = wait
+        result = self.run_with("Fix async polling state synchronization.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.FAILED)
+        self.assertEqual([item.phase for item in adapter.routes], [
+            Phase.INVESTIGATION, Phase.ASSESSMENT])
+        self.assertEqual(sum(item.phase is Phase.ASSESSMENT for item in adapter.routes), 1)
+        self.assertIn("identical risk floor already applied",
+                      result.adaptive_decisions[-1]["decision_reason"])
+
     def test_complex_target_failure_reopens_without_invented_assessment(self):
         implementation = evidence(Phase.IMPLEMENTATION, verification_mode="MODEL_REVIEW")
         adapter = ClosedLoopAdapter({
@@ -942,6 +1215,99 @@ class ProductionClosedLoopTests(unittest.TestCase):
         self.assertIs(result.final_status, PhaseStatus.SUCCESS)
         self.assertEqual(result.cost_metrics.attempt_count, 2)
         self.assertEqual(result.adaptive_decisions[0]["decision"], "RETRY_SAME_CAPABILITY")
+
+    def test_repeated_rate_limit_terminates_without_capability_escalation(self):
+        adapter = ClosedLoopAdapter({})
+        calls = 0
+        def transient(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise CoordinatorError("rate limit temporarily exceeded")
+        adapter.start_worker = transient
+        result = self.run_with("Inspect metadata. Do not modify files.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.FAILED)
+        self.assertEqual(result.cost_metrics.attempt_count, 2)
+        self.assertEqual({phase.model for phase in result.phase_list}, {LUNA})
+        self.assertNotIn("ESCALATE_CAPABILITY", [item["decision"] for item in result.adaptive_decisions])
+
+    def test_replan_creates_narrow_child_before_retrying_parent(self):
+        adapter = ClosedLoopAdapter({"implementation": [
+            {"status": "failed", "summary": "task decomposition is too broad",
+             "failure_class_hint": "DECOMPOSITION_FAILURE",
+             "evidence": ["three unrelated scopes"]},
+            evidence(Phase.IMPLEMENTATION),
+        ]})
+        result = self.run_with("Implement a validation helper.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual([(item.phase, item.authority) for item in adapter.routes], [
+            (Phase.IMPLEMENTATION, Authority.WORKSPACE_WRITE),
+            (Phase.INVESTIGATION, Authority.READ_ONLY),
+            (Phase.IMPLEMENTATION, Authority.WORKSPACE_WRITE),
+        ])
+        self.assertIn("narrowed_question: resolve the latest unresolved question only", adapter.specs[1])
+        self.assertIn("excluded_scope: do not repeat the original broad strategy", adapter.specs[1])
+
+    def test_sol_high_write_uses_xhigh_read_only_diagnosis_then_reopens_high_write(self):
+        adapter = ClosedLoopAdapter({"implementation": [
+            {"status": "failed", "summary": "conflicting architecture evidence remains",
+             "verification_outcome": "INCONCLUSIVE",
+             "evidence": ["hypothesis A contradicted", "hypothesis B contradicted"],
+             "unresolved_questions": ["which invariant owns state"]},
+            evidence(Phase.IMPLEMENTATION),
+        ]})
+        result = self.run_with("Implement a destructive migration with rollback uncertainty.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        attempts = [(item.phase, item.effort, item.authority) for item in adapter.routes]
+        self.assertIn((Phase.INVESTIGATION, "xhigh", Authority.READ_ONLY), attempts)
+        self.assertNotIn((Phase.IMPLEMENTATION, "xhigh", Authority.WORKSPACE_WRITE), attempts)
+        write_efforts = [item.effort for item in adapter.routes
+                         if item.phase is Phase.IMPLEMENTATION]
+        self.assertEqual(write_efforts, ["high", "high"])
+
+    def test_runner_derived_budget_reaches_full_read_only_ladder(self):
+        adapter = ClosedLoopAdapter({})
+        counts = {}
+        def read_result(worker):
+            rank = capability_rank(worker.route)
+            counts[rank] = counts.get(rank, 0) + 1
+            if rank == 5:
+                return evidence(Phase.INVESTIGATION)
+            common = {
+                "status": "failed",
+                "summary": f"capability rank {rank} remains ambiguous",
+                "failure_class_hint": "AMBIGUOUS_FAILURE",
+                "evidence": [f"rank-{rank}-attempt-{counts[rank]}"],
+            }
+            if rank == 4 and counts[rank] == 2:
+                common.update({
+                    "verification_outcome": "INCONCLUSIVE",
+                    "evidence": ["hypothesis A contradicted", "hypothesis B contradicted"],
+                    "unresolved_questions": ["which invariant owns state"],
+                })
+            return common
+        adapter.read_result = read_result
+        result = self.run_with("Inspect ambiguous metadata. Do not modify files.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.SUCCESS)
+        self.assertEqual([capability_rank(item) for item in adapter.routes],
+                         [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5])
+        self.assertTrue(all(item.authority is Authority.READ_ONLY for item in adapter.routes))
+        self.assertLessEqual(result.cost_metrics.attempt_count,
+                             ProductionRunner().max_attempts_per_gate)
+
+    def test_repeated_identical_risk_floor_cannot_reinsert_critical_cycle(self):
+        adapter = ClosedLoopAdapter({}, modes=["escalation", "worker_done", "escalation"])
+        original_wait = adapter.wait_for_completion
+        def wait(run_id, worker, timeout_ms):
+            value = original_wait(run_id, worker, timeout_ms)
+            if value["mode"] == "escalation":
+                value["message"]["body"] = "authorization risk discovered"
+            return value
+        adapter.wait_for_completion = wait
+        result = self.run_with("Implement a validation helper.", adapter)
+        self.assertIs(result.final_status, PhaseStatus.FAILED)
+        self.assertEqual([item.phase for item in adapter.routes], [
+            Phase.IMPLEMENTATION, Phase.ASSESSMENT, Phase.IMPLEMENTATION])
+        self.assertIn("identical risk floor already applied", result.adaptive_decisions[-1]["decision_reason"])
 
     def test_sol_unavailable_blocks_without_terra_downgrade(self):
         adapter = ClosedLoopAdapter({})

@@ -159,6 +159,13 @@ verification, and invoke an independent READ-ONLY verifier only when remaining
 risk makes model review useful or mandatory. Cleanup failure forbids final
 SUCCESS.
 
+Sol/xhigh is restricted to bounded READ_ONLY diagnosis. A failed Sol/high WRITE
+Gate may request such a diagnosis, but any reopened mutation Gate remains
+Sol/high or lower. Repeated transient failures and repeated identical risk-floor
+signatures terminate without capability escalation or route replay. Verification
+requires concrete evidence and no unresolved questions; executable deterministic
+checks cannot be replaced by model review.
+
 ## User Overrides
 
 Explicit user instructions override automatic routing policy.

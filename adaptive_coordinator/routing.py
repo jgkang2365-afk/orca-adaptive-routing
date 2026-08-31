@@ -60,7 +60,7 @@ class Router:
     READ_ONLY = (
         "do not modify", "do not change", "read-only", "read only", "inspect only",
         "파일을 수정하지", "파일은 수정하지", "변경하지 말", "조사만", "읽기 전용",
-        "조회만", "검토만",
+        "조회만", "검토만", "파일 수정 금지",
     )
     WRITE = (
         "implement", "write ", "modify ", "fix ", "add ", "change ", "update ", "refactor", "create ",
@@ -74,6 +74,19 @@ class Router:
         "multi-module", "multiple services", "외부 api", "외부 서비스", "외부 연동",
         "비동기", "재시도", "타임아웃", "동시성", "상태 동기화", "다중 모듈",
         "여러 서비스", "복합 회귀",
+        "polling", "queue polling", "worker polling", "backoff", "watchdog",
+        "request volume", "api usage", "usage optimization", "poll interval",
+        "폴링", "상시 조회", "반복 조회", "호출 주기", "주기 조정", "백오프",
+        "워치독", "호출량 절감", "요청량 절감", "api 사용량", "사용량 최적화",
+        "상태 확인 주기",
+    )
+    OPTIMIZATION_WRITE = (
+        "optimize", "optimization", "apply", "improve", "adjust",
+        "최적화", "개선", "적용", "구현", "수정", "변경", "조정",
+    )
+    ANALYSIS_ONLY = (
+        "investigate cause only", "analysis only", "review only", "recommendations only",
+        "원인만 조사", "분석만", "검토만", "개선 방안만 작성",
     )
     CRITICAL_SIGNALS = {
         "database migration": "database migration", "database schema": "database schema",
@@ -115,10 +128,18 @@ class Router:
             forbidden.extend(match.strip() for match in matches if match.strip())
             positive = re.sub(pattern, " ", positive, flags=re.IGNORECASE)
         positive = " ".join(positive.split())
-        positive_write = any(signal in positive for signal in self.WRITE)
-        read_only = any(signal in normalized for signal in self.READ_ONLY) and not positive_write
+        optimization_write = (any(signal in positive for signal in self.COMPLEX)
+                              and any(signal in positive for signal in self.OPTIMIZATION_WRITE))
+        explicit_analysis_only = any(signal in normalized for signal in self.ANALYSIS_ONLY)
+        positive_write = any(signal in positive for signal in self.WRITE) or optimization_write
+        if explicit_analysis_only:
+            positive_write = False
+            read_only = True
+        else:
+            read_only = any(signal in normalized for signal in self.READ_ONLY) and not positive_write
         requested = ["WRITE" if positive_write and not read_only else "READ_ONLY"]
-        if any(signal in positive for signal in self.COMPLEX):
+        if (any(signal in positive for signal in self.COMPLEX)
+                or (explicit_analysis_only and any(signal in normalized for signal in self.COMPLEX))):
             requested.append("COMPLEX")
         if any(signal in positive for signal in self.STANDARD):
             requested.append("STANDARD")
