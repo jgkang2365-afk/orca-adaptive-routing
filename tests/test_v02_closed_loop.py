@@ -846,14 +846,16 @@ class ProductionClosedLoopTests(unittest.TestCase):
                               [item["failure_class"] for item in result.adaptive_decisions])
 
     def test_fake_reported_git_head_cannot_override_actual_workspace_head(self):
-        fake = "0" * 40
+        root, actual = self.git_workspace()
+        fake = ("0" if actual[0] != "0" else "1") + actual[1:]
+        self.assertNotEqual(fake, actual)
         adapter = ClosedLoopAdapter({
             "implementation": [evidence(Phase.IMPLEMENTATION, git_head=fake)],
             "verification": [evidence(Phase.VERIFICATION, git_head=fake)],
         })
         result = ProductionRunner(adapter_factory=lambda _: adapter, timeout_ms=1).run(
             "Implement a reversible database migration.",
-            "/home/user/projects/orca-adaptive-routing",
+            root,
         )
         self.assertIsNot(result.final_status, PhaseStatus.SUCCESS)
         self.assertIn("TARGET_IDENTITY_MISMATCH",
