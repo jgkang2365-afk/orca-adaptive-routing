@@ -190,6 +190,11 @@ class OrcaAdapter:
     # registry.  These are readiness retries for the *same* terminal, not new
     # worker attempts and not a reason to change model capability.
     WORKER_START_READINESS_DELAYS = (0.25, 0.5, 1.0, 2.0)
+    # TUI-idle only describes the rendered terminal.  After an update prompt
+    # is skipped, Orca can need longer to recognize the Codex process as an
+    # agent.  Poll the same terminal's structured identity before dispatch;
+    # never create a replacement terminal merely because registration lags.
+    AGENT_IDENTITY_READINESS_DELAYS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
     LIFECYCLE_CHECK_BACKOFF_SECONDS = 0.05
     LIFECYCLE_CHECK_SLICE_MS = 2_000
     LIFECYCLE_IDLE_PROBE_SLICE_MS = 250
@@ -333,6 +338,54 @@ class OrcaAdapter:
             )
         return readiness
 
+    def _wait_for_agent_identity(self, terminal_handle: str) -> None:
+        for attempt in range(len(self.AGENT_IDENTITY_READINESS_DELAYS) + 1):
+            response = self.runner(
+                [
+                    self.executable,
+                    "terminal",
+                    "show",
+                    "--terminal",
+                    terminal_handle,
+                    "--json",
+                ]
+            )
+            terminal = response.get("terminal")
+            if not isinstance(terminal, Mapping):
+                raise CoordinatorError(
+                    "terminal show returned no structured terminal identity",
+                    code="agent_unconfigured",
+                )
+            reported_handle = terminal.get("handle")
+            if reported_handle != terminal_handle:
+                raise CoordinatorError(
+                    "terminal show identity does not match the created terminal",
+                    code="agent_unconfigured",
+                )
+            identity = terminal.get("agentIdentity")
+            if identity == "codex":
+                return
+            if identity not in (None, ""):
+                raise CoordinatorError(
+                    f"terminal is running an unexpected agent: {identity}",
+                    code="agent_unconfigured",
+                )
+            if attempt >= len(self.AGENT_IDENTITY_READINESS_DELAYS):
+                break
+            time.sleep(self.AGENT_IDENTITY_READINESS_DELAYS[attempt])
+            # A version prompt can surface after an earlier idle observation.
+            # Recheck the same terminal and select only Codex's explicit Skip
+            # action; this never updates Codex or weakens the sandbox.
+            self._wait_for_tui_idle(
+                terminal_handle,
+                10000,
+                allow_update_skip=True,
+            )
+        raise CoordinatorError(
+            "terminal is not running a recognized agent",
+            code="agent_unconfigured",
+        )
+
     def start_worker(
         self,
         run_id: str,
@@ -366,6 +419,7 @@ class OrcaAdapter:
                 60000,
                 allow_update_skip=True,
             )
+            self._wait_for_agent_identity(terminal_handle)
             worker_start = [
                 self.executable,
                 "orchestration",
