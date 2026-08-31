@@ -712,6 +712,9 @@ class ProductionClosedLoopTests(unittest.TestCase):
             self.assertIn("encoding the same compact JSON object", spec)
             self.assertIn("READ-ONLY workers cannot write to /tmp or the workspace", spec)
             if "Implement" in task:
+                self.assertIn("Every one of those six names is a required top-level JSON key", spec)
+                self.assertIn('"workspace_diff":["path"]', spec)
+                self.assertIn("must both list the actual Git-changed paths", spec)
                 self.assertIn("test_results must use exactly one of two non-mixing forms", spec)
                 self.assertIn("(A) a one-entry list", spec)
                 self.assertIn("(B) one or more entries all exactly", spec)

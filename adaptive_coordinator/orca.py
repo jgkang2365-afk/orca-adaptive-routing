@@ -554,16 +554,29 @@ class OrcaAdapter:
     def _close_terminal_once(self, terminal_handle: str) -> dict[str, Any]:
         if terminal_handle in self._closed_terminal_handles:
             return {"closed": True, "alreadyClosed": True}
-        closed = self.runner(
-            [
-                self.executable,
-                "terminal",
-                "close",
-                "--terminal",
-                terminal_handle,
-                "--json",
-            ]
-        )
+        try:
+            closed = self.runner(
+                [
+                    self.executable,
+                    "terminal",
+                    "close",
+                    "--terminal",
+                    terminal_handle,
+                    "--json",
+                ]
+            )
+        except CoordinatorError as exc:
+            # Orca can complete worker-stop by closing the exact owned tab
+            # before this explicit close reaches the runtime.  Accept only
+            # that precise already-absent state; every ambiguous registry or
+            # ownership error remains fail-closed.
+            already_absent = re.fullmatch(
+                r"(?:runtime_error:\s*)?tab_not_found[.!]?",
+                str(exc).strip().lower(),
+            )
+            if exc.code != "runtime_error" or already_absent is None:
+                raise
+            closed = {"closed": True, "alreadyAbsent": True}
         self._closed_terminal_handles.add(terminal_handle)
         return closed
 

@@ -1306,6 +1306,35 @@ class OrcaAdapterTests(unittest.TestCase):
                    if command[1:3] == ["orchestration", "task-update"]]
         self.assertEqual(len(updates), 1)
 
+    def test_exact_tab_not_found_after_fence_is_idempotent(self) -> None:
+        original = self.adapter.runner
+
+        def already_closed(command):
+            if command[1:3] == ["terminal", "close"]:
+                raise CoordinatorError("tab_not_found", code="runtime_error")
+            return original(command)
+
+        self.adapter.runner = already_closed
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        self.adapter.fail_worker("run", worker, "invalid evidence")
+        updates = [command for command in self.runner.commands
+                   if command[1:3] == ["orchestration", "task-update"]]
+        self.assertEqual(len(updates), 1)
+        self.assertIn("terminal", self.adapter._closed_terminal_handles)
+
+    def test_other_terminal_close_errors_remain_fail_closed(self) -> None:
+        original = self.adapter.runner
+
+        def wrong_terminal_error(command):
+            if command[1:3] == ["terminal", "close"]:
+                raise CoordinatorError("runtime_error: pane_not_found", code="runtime_error")
+            return original(command)
+
+        self.adapter.runner = wrong_terminal_error
+        worker = WorkerHandle("task", "dispatch", "terminal", route(Authority.READ_ONLY))
+        with self.assertRaises(LifecycleSettlementError):
+            self.adapter.fail_worker("run", worker, "invalid evidence")
+
     def test_unknown_stop_error_is_not_silently_accepted(self) -> None:
         def unknown_stop(command):
             if command[1:3] == ["orchestration", "worker-stop"]:

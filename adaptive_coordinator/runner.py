@@ -1141,7 +1141,13 @@ class ProductionRunner:
             Phase.ASSESSMENT: "risks, impact, rollback, write_ready, unresolved_questions",
             Phase.IMPLEMENTATION: (
                 "files_modified, requirements_completed, tests_run, test_results, unexecuted_verification, "
-                "workspace_diff. unexecuted_verification must be [] when complete; otherwise each entry must be "
+                "workspace_diff. Every one of those six names is a required top-level JSON key; never omit a key. "
+                "Use this shape: {\"status\":\"SUCCEEDED\",\"summary\":\"three sentences\","
+                "\"files_modified\":[\"path\"],\"requirements_completed\":[\"requirement\"],"
+                "\"tests_run\":[\"check\"],\"test_results\":[\"check: passed\"],"
+                "\"unexecuted_verification\":[],\"workspace_diff\":[\"path\"]}. "
+                "workspace_diff and files_modified must both list the actual Git-changed paths relative to the "
+                "workspace root. unexecuted_verification must be [] when complete; otherwise each entry must be "
                 "{check, blocking, reason}. String entries, missing reasons, blocking=true, and an unexecuted "
                 "deterministic_required check block SUCCESS. A model review cannot replace an executable "
                 "deterministic check. test_results must use exactly one of two non-mixing forms: (A) a one-entry list "
