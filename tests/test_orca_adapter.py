@@ -52,6 +52,8 @@ class FakeRunner:
                     "blockedReason": None,
                 }
             }
+        if command[1:3] == ["terminal", "show"]:
+            return {"terminal": {"handle": "term_test", "agentIdentity": "codex"}}
         if command[1:3] == ["orchestration", "worker-start"]:
             return {"dispatchId": "ctx_test"}
         if command[1:3] == ["orchestration", "task-update"]:
@@ -156,7 +158,10 @@ class OrcaAdapterTests(unittest.TestCase):
             r"path:\\wsl.localhost\Ubuntu-24.04\home\user\project",
             create,
         )
-        worker_start = self.runner.commands[2]
+        worker_start = next(
+            command for command in self.runner.commands
+            if command[1:3] == ["orchestration", "worker-start"]
+        )
         self.assertIn("term_test", worker_start)
         self.assertIn(
             r"path:\\wsl.localhost\Ubuntu-24.04\home\user\project",
@@ -364,6 +369,104 @@ class OrcaAdapterTests(unittest.TestCase):
         self.assertTrue(all("term_test" in command for command in self.runner.commands
                             if command[1:3] in (["terminal", "wait"],
                                                 ["orchestration", "worker-start"])))
+
+    def test_agent_identity_registration_is_polled_on_same_terminal(self) -> None:
+        original = self.adapter.runner
+        identity_checks = 0
+
+        def delayed_identity(command):
+            nonlocal identity_checks
+            command = list(command)
+            if command[1:3] == ["terminal", "show"]:
+                identity_checks += 1
+                self.runner.commands.append(command)
+                identity = "codex" if identity_checks == 4 else None
+                return {"terminal": {"handle": "term_test", "agentIdentity": identity}}
+            return original(command)
+
+        self.adapter.runner = delayed_identity
+        with patch("adaptive_coordinator.orca.time.sleep") as sleep:
+            worker = self.adapter.start_worker(
+                "run_test", "task_test", route(Authority.READ_ONLY)
+            )
+
+        self.assertEqual(worker.dispatch_id, "ctx_test")
+        self.assertEqual(identity_checks, 4)
+        self.assertEqual(sleep.call_count, 3)
+        self.assertEqual(sum(command[1:3] == ["terminal", "create"]
+                             for command in self.runner.commands), 1)
+        self.assertEqual(sum(command[1:3] == ["orchestration", "worker-start"]
+                             for command in self.runner.commands), 1)
+        self.assertEqual(sum(command[1:3] == ["terminal", "close"]
+                             for command in self.runner.commands), 0)
+
+    def test_missing_agent_identity_closes_created_terminal_without_dispatch(self) -> None:
+        original = self.adapter.runner
+
+        def never_identified(command):
+            command = list(command)
+            if command[1:3] == ["terminal", "show"]:
+                self.runner.commands.append(command)
+                return {"terminal": {"handle": "term_test"}}
+            return original(command)
+
+        self.adapter.runner = never_identified
+        with patch("adaptive_coordinator.orca.time.sleep") as sleep:
+            with self.assertRaises(CoordinatorError) as raised:
+                self.adapter.start_worker(
+                    "run_test", "task_test", route(Authority.READ_ONLY)
+                )
+
+        self.assertEqual(raised.exception.code, "agent_unconfigured")
+        self.assertEqual(
+            sleep.call_count, len(self.adapter.AGENT_IDENTITY_READINESS_DELAYS)
+        )
+        self.assertFalse(any(command[1:3] == ["orchestration", "worker-start"]
+                             for command in self.runner.commands))
+        closes = [command for command in self.runner.commands
+                  if command[1:3] == ["terminal", "close"]]
+        self.assertEqual(len(closes), 1)
+        self.assertEqual(closes[0][closes[0].index("--terminal") + 1], "term_test")
+
+    def test_agent_identity_requires_matching_created_terminal_handle(self) -> None:
+        for terminal_payload in (
+            {"handle": "term_other", "agentIdentity": "codex"},
+            {"agentIdentity": "codex"},
+        ):
+            with self.subTest(terminal_payload=terminal_payload):
+                runner = FakeRunner()
+                adapter = OrcaAdapter(
+                    "/home/user/projects/test",
+                    runner=runner,
+                    worktree_selector="path:test",
+                    change_detector=lambda: {},
+                )
+                original = adapter.runner
+
+                def mismatched(command, *, _payload=terminal_payload):
+                    command = list(command)
+                    if command[1:3] == ["terminal", "show"]:
+                        runner.commands.append(command)
+                        return {"terminal": _payload}
+                    return original(command)
+
+                adapter.runner = mismatched
+                with self.assertRaises(CoordinatorError) as raised:
+                    adapter.start_worker(
+                        "run_test", "task_test", route(Authority.READ_ONLY)
+                    )
+
+                self.assertEqual(raised.exception.code, "agent_unconfigured")
+                self.assertFalse(any(
+                    command[1:3] == ["orchestration", "worker-start"]
+                    for command in runner.commands
+                ))
+                closes = [command for command in runner.commands
+                          if command[1:3] == ["terminal", "close"]]
+                self.assertEqual(len(closes), 1)
+                self.assertEqual(
+                    closes[0][closes[0].index("--terminal") + 1], "term_test"
+                )
 
     def test_agent_readiness_retry_skips_reappearing_exact_update_prompt(self) -> None:
         original = self.adapter.runner
