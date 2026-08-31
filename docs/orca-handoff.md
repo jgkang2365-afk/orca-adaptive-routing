@@ -99,7 +99,13 @@ The six successful Pilot Tasks used the documented Coordinator trusted relay bec
 
 ## Remaining Issues
 
-None for this deployment. Orca's operator-close status on trusted-relay Dispatch records is an expected lifecycle artifact and must be interpreted together with the authoritative completed Task evidence and released resource state.
+No deployment blockers remain.
+
+Known operational limitations:
+
+1. GitHub `main` branch protection is not available for this private repository under the current account plan. `Adaptive Coordinator Quality / quality-gate` CI is active and has passed, but GitHub does not technically enforce that check as a merge requirement.
+2. Sandboxed WSL workers may require the verified Coordinator trusted-relay fallback when direct WSL lifecycle delivery is unavailable. This fallback still requires phase-specific success evidence, exact workspace-diff validation, worker fencing, Task settlement, terminal release, and zero residual resources; it does not bypass the Success Evidence Gate.
+3. Orca may record trusted-relay Dispatches as `operator-close` after the Coordinator has already accepted authoritative Task evidence and released the worker. Consumers must interpret Task/Runner success together with released-resource state rather than treating the post-close Dispatch status alone as task failure.
 
 ## Decision Required
 
