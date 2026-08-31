@@ -201,6 +201,10 @@ def _manifest_path(target: Path) -> Path:
     return target.with_name(target.name + MANIFEST_SUFFIX)
 
 
+def _expected_patched_sha(original: bytes) -> str:
+    return sha256_bytes(patch_source(original.decode("utf-8")).encode("utf-8"))
+
+
 def install_patch(target: Path, *, expected_sha256: str = ORIGINAL_SHA256) -> dict[str, str]:
     content = target.read_bytes()
     current_sha = sha256_bytes(content)
@@ -211,6 +215,11 @@ def install_patch(target: Path, *, expected_sha256: str = ORIGINAL_SHA256) -> di
         if not backup.is_file() or sha256_bytes(backup.read_bytes()) != expected_sha256:
             raise CompatibilityPatchError("patched target lacks the exact trusted backup")
         validate_patched_source(content.decode("utf-8"))
+        expected_patched_sha = _expected_patched_sha(backup.read_bytes())
+        if current_sha != expected_patched_sha:
+            raise CompatibilityPatchError(
+                "patched target differs from the exact deterministic patch"
+            )
         return {"status": "already_patched", "sha256": current_sha}
     if current_sha != expected_sha256:
         raise CompatibilityPatchError(
@@ -268,6 +277,11 @@ def rollback_patch(
         raise CompatibilityPatchError("refusing to overwrite an unknown modified target")
     else:
         validate_patched_source(current.decode("utf-8"))
+        expected_patched_sha = _expected_patched_sha(original)
+        if current_sha != expected_patched_sha:
+            raise CompatibilityPatchError(
+                "refusing modified content that only preserves the patch marker"
+            )
     _atomic_write(target, original, target.stat().st_mode & 0o777)
     _manifest_path(target).unlink(missing_ok=True)
     return {"status": "rolled_back", "sha256": expected_sha256}
@@ -276,19 +290,27 @@ def rollback_patch(
 def patch_status(target: Path, *, expected_sha256: str = ORIGINAL_SHA256) -> dict[str, object]:
     content = target.read_bytes()
     current_sha = sha256_bytes(content)
+    backup = _backup_path(target)
+    trusted_backup = (
+        backup.is_file() and sha256_bytes(backup.read_bytes()) == expected_sha256
+    )
+    exact_patched = False
+    if PATCH_MARKER.encode() in content and trusted_backup:
+        try:
+            exact_patched = current_sha == _expected_patched_sha(backup.read_bytes())
+        except (CompatibilityPatchError, UnicodeError):
+            exact_patched = False
     state = (
         "original"
         if current_sha == expected_sha256
         else "patched"
-        if PATCH_MARKER.encode() in content
+        if exact_patched
         else "unknown"
     )
-    backup = _backup_path(target)
     return {
         "state": state,
         "sha256": current_sha,
-        "trustedBackup": backup.is_file()
-        and sha256_bytes(backup.read_bytes()) == expected_sha256,
+        "trustedBackup": trusted_backup,
     }
 
 

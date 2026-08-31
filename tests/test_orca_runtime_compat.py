@@ -153,6 +153,22 @@ class OrcaRuntimeCompatibilityPatchTests(unittest.TestCase):
         with self.assertRaises(PATCHER.CompatibilityPatchError):
             PATCHER.rollback_patch(self.target, expected_sha256=self.expected_sha)
 
+    def test_marker_preserving_post_install_mutation_is_never_trusted(self) -> None:
+        PATCHER.install_patch(self.target, expected_sha256=self.expected_sha)
+        with self.target.open("a") as stream:
+            stream.write("// unexpected post-install mutation\n")
+
+        self.assertEqual(
+            PATCHER.patch_status(
+                self.target, expected_sha256=self.expected_sha
+            )["state"],
+            "unknown",
+        )
+        with self.assertRaises(PATCHER.CompatibilityPatchError):
+            PATCHER.install_patch(self.target, expected_sha256=self.expected_sha)
+        with self.assertRaises(PATCHER.CompatibilityPatchError):
+            PATCHER.rollback_patch(self.target, expected_sha256=self.expected_sha)
+
     def test_rollback_accepts_only_exact_allowlisted_legacy_with_trusted_backup(self) -> None:
         legacy = b"exact legacy artifact\n"
         legacy_sha = hashlib.sha256(legacy).hexdigest()
