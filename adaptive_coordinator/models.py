@@ -161,7 +161,15 @@ class LogicalGateState:
     baseline_changes: dict[str, str] = field(default_factory=dict, repr=False)
     parent_gate_id: str | None = None
     evidence_source_gate_id: str | None = None
+    target_source_gate_id: str | None = None
+    root_gate_id: str | None = None
     verified_facts: list[str] = field(default_factory=list)
+    target_fingerprint: dict[str, object] = field(default_factory=dict)
+    evidence_repairs: int = 0
+    diagnosis_count: int = 0
+    capability_ranks_used: set[int] = field(default_factory=set)
+    applied_risk_signature: str | None = None
+    applied_floor_rank: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -171,7 +179,15 @@ class LogicalGateState:
             "status": self.status,
             "parent_gate_id": self.parent_gate_id,
             "evidence_source_gate_id": self.evidence_source_gate_id,
+            "target_source_gate_id": self.target_source_gate_id,
+            "root_gate_id": self.root_gate_id,
             "verified_facts": list(self.verified_facts),
+            "target_fingerprint": dict(self.target_fingerprint),
+            "evidence_repairs": self.evidence_repairs,
+            "diagnosis_count": self.diagnosis_count,
+            "capability_ranks_used": sorted(self.capability_ranks_used),
+            "applied_risk_signature": self.applied_risk_signature,
+            "applied_floor_rank": self.applied_floor_rank,
             "attempts": [attempt.to_dict() for attempt in self.attempts],
         }
 

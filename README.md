@@ -1,12 +1,13 @@
 # Orca Adaptive Routing
 
-Adaptive Coordinator v0.1 converts a task brief into an explicit routing plan
-and can attach a policy-configured Codex terminal to an Orca supervised
-Task/Dispatch.
+Adaptive Coordinator v0.2.1 turns a task brief into a closed-loop routing plan
+and executes its logical Gates through Orca-supervised Codex workers.
 
 ```bash
 python3 -m adaptive_coordinator route "Inspect the repository and list Markdown files."
 python3 -m adaptive_coordinator launch "Inspect the repository and list Markdown files."
+orca-adaptive run "Inspect the repository and list Markdown files." --workspace "$PWD"
+orca-adaptive --version
 ```
 
 The router selects model, reasoning effort, authority, phase ordering, and
@@ -16,6 +17,13 @@ disabled, ordinary implementation uses explicit `workspace-write` with approvals
 disabled so outside-workspace requests fail rather than entering review,
 and `danger-full-access` is never generated. Critical WRITE phases cannot launch
 until their separate READ-ONLY assessment is explicitly recorded as complete.
+
+The capability ladder is Luna/low, Terra/medium, Terra/high, Sol/medium,
+Sol/high, then Sol/xhigh. Automatic Sol/xhigh is a bounded READ-ONLY diagnosis
+only; capability never raises filesystem authority. Lifecycle completion is not
+task success: phase-specific evidence, unresolved-question, deterministic-test,
+target-identity, fencing, and cleanup Gates must all pass. Pull requests and
+main pushes run the `Adaptive Coordinator Quality / quality-gate` GitHub check.
 
 The Orca adapter uses the supported custom-argv path:
 

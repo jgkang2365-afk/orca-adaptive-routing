@@ -1,6 +1,6 @@
 # Adaptive Model Routing Policy
 
-Version: 0.2
+Version: 0.2.1
 
 ## Purpose and boundaries
 
@@ -66,7 +66,7 @@ an untrusted root cause. Permission, credentials, plan limits, outages, quota,
 user action, unsupported features, Orca/placement errors, syntax failures,
 missing evidence, and wrong deployment targets never justify xhigh. Default
 budgets are one xhigh attempt per Gate and one per run. xhigh is the automatic
-ceiling; Sol/max is outside v0.2.
+ceiling; Sol/max is outside v0.2.1.
 
 ## Lifecycle, logical Gates, and attempts
 
@@ -197,6 +197,15 @@ for clearly recoverable local mistakes or safe transient failure, a READ_ONLY
 diagnostic Gate determines root cause and scope before WRITE is reopened.
 Capability and authority remain independent during diagnosis and escalation.
 
+v0.2.1 separates evidence-repair, same-level retry, diagnosis, capability-rank,
+and xhigh budgets. The Gate hard fuse is derived from those legal budgets rather
+than a magic number that can truncate the ladder. Repeated transient failures
+terminate as runtime/external failures and never become capability escalation.
+`DECOMPOSITION_FAILURE` creates a narrower READ_ONLY child Gate with an explicit
+question, exclusions, required evidence, and non-repeat strategy. Reapplying the
+same risk signature at the same floor is a no-progress terminal, not a new
+Assessment/WRITE/Verification cycle.
+
 Deployment triggers, external write APIs, production mutation, billing, and data
 changes are not automatically repeated unless idempotency, non-execution, or a
 safe rollback/retry condition is objectively established. Otherwise use a
@@ -209,6 +218,14 @@ Deterministic checks (tests, type/lint/schema checks, Git diff, API status,
 deployment commit and response) run first. Low-risk local work with sufficient
 deterministic coverage does not receive a Sol verifier merely because
 implementation succeeded.
+
+`VERIFIED` is accepted only with a successful worker status, non-empty concrete
+evidence, an explicitly present empty `unresolved_questions` list, and a matching
+target fingerprint when target identity is supplied. For implementation,
+`unexecuted_verification` is empty or a structured list of `{check, blocking,
+reason}` entries. Legacy non-empty strings, missing reasons, blocking entries,
+and unexecuted required deterministic checks block SUCCESS. Model review never
+substitutes for an executable deterministic check.
 
 Model review is used for semantic design, policy, UX, multi-module interaction,
 or remaining regression risk. Critical DB/auth/security/data-loss and

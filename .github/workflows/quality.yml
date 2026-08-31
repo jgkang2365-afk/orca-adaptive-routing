@@ -1,0 +1,29 @@
+name: Adaptive Coordinator Quality
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Unit and contract tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Compile Python
+        run: python -m compileall adaptive_coordinator tests
+      - name: Validate installer shell
+        run: bash -n scripts/install-production.sh
+      - name: Validate whitespace
+        run: git diff --check HEAD~1 HEAD
+      - name: Benchmark zero invariants
+        run: python scripts/run-v02-benchmark.py
