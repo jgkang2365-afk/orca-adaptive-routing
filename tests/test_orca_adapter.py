@@ -154,6 +154,10 @@ class OrcaAdapterTests(unittest.TestCase):
         launch_command = create[create.index("--command") + 1]
         self.assertIn("codex", launch_command)
         self.assertIn("read-only", launch_command)
+        self.assertEqual(
+            create[create.index("--title") + 1],
+            "orca-adaptive:investigation",
+        )
         self.assertIn(
             r"path:\\wsl.localhost\Ubuntu-24.04\home\user\project",
             create,
