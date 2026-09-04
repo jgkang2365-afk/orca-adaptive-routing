@@ -1,8 +1,9 @@
-"""Adaptive Coordinator v0.2.1 public API."""
+"""Adaptive Coordinator v0.3.0 public API."""
 
 from .models import (
-    AdaptiveDecision, Authority, FailureClass, Phase, Route, RoutingPlan,
-    VerificationMode, VerificationOutcome,
+    AdaptiveDecision, Authority, FailureClass, InteractionMode, Phase, Route,
+    RoutingPlan, RunMetadata, RunRequest, SubtaskSpec, VerificationMode,
+    VerificationOutcome,
 )
 from .routing import CAPABILITY_LADDER, Router, capability_at, capability_rank, next_capability
 from .runner import PhaseResult, PhaseStatus, ProductionRunner, RunResult
@@ -12,6 +13,7 @@ __all__ = [
     "AdaptiveDecision",
     "CAPABILITY_LADDER",
     "FailureClass",
+    "InteractionMode",
     "Phase",
     "PhaseResult",
     "PhaseStatus",
@@ -19,7 +21,10 @@ __all__ = [
     "Route",
     "Router",
     "RoutingPlan",
+    "RunMetadata",
+    "RunRequest",
     "RunResult",
+    "SubtaskSpec",
     "VerificationMode",
     "VerificationOutcome",
     "capability_at",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import re
 import subprocess
@@ -12,7 +13,8 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .models import (
     AdaptiveDecision, AttemptMetadata, Authority, EvidencePacket, FailureClass,
-    LogicalGateState, Phase, Route, RoutingPlan, VerificationMode, VerificationOutcome,
+    InteractionMode, LogicalGateState, Phase, Route, RoutingPlan, RunMetadata,
+    RunRequest, SubtaskSpec, VerificationMode, VerificationOutcome,
 )
 from .orca import CoordinatorError, LifecycleSettlementError, OrcaAdapter, WorkerHandle
 from .result_sentinel import explicit_orca_failure_status, final_marked_structured_result
@@ -87,6 +89,14 @@ class PhaseResult:
         return result
 
 
+@dataclass(frozen=True)
+class FanoutOutcome:
+    success: bool
+    risk_floor_rank: int | None = None
+    risk_signature: str | None = None
+    risk_finding: str | None = None
+
+
 @dataclass
 class CostMetrics:
     worker_count: int = 0
@@ -126,6 +136,29 @@ class RunResult:
     verifier_required_reason: str | None = None
     deterministic_coverage: list[str] = field(default_factory=list)
     remaining_risk: list[str] = field(default_factory=list)
+    delegated_by_parent: bool = False
+    preapproved: bool = False
+    interaction_mode: str = InteractionMode.STANDARD.value
+    subtask_count: int = 0
+    parallel_groups: list[dict[str, Any]] = field(default_factory=list)
+    max_observed_concurrency: int = 0
+    launch_barrier_count: int = 0
+    overlap_observation: str = "not-observed-by-coordinator"
+    parent_mutation_count: int = 0
+    approval_prompt_count: int = 0
+    worker_count: int = 0
+    write_worker_count: int = 0
+    verifier_count: int = 0
+    subtask_trace: list[dict[str, Any]] = field(default_factory=list)
+    telemetry_scope: str = "coordinator-owned"
+    telemetry_provenance: dict[str, str] = field(default_factory=lambda: {
+        "parent_mutation_count": "Coordinator execution-path invariant; host UI must be measured separately",
+        "approval_prompt_count": "Coordinator worker configuration; host UI must be measured separately",
+        "worker_counts": "Orca workers launched by this ProductionRunner invocation",
+        "subtask_trace": "Coordinator monotonic-clock observations",
+        "launch_barrier_count": "Workers started before the first coordinator wait; not proof of runtime overlap",
+        "max_observed_concurrency": "Conservative runtime overlap count; UI/runtime trace is authoritative",
+    })
 
     def to_dict(self) -> dict[str, Any]:
         # v1 fields stay present; v2 fields are additive.
@@ -148,10 +181,77 @@ class RunResult:
             "verifier_required_reason": self.verifier_required_reason,
             "deterministic_coverage": self.deterministic_coverage,
             "remaining_risk": self.remaining_risk,
+            "delegated_by_parent": self.delegated_by_parent,
+            "preapproved": self.preapproved,
+            "interaction_mode": self.interaction_mode,
+            "subtask_count": self.subtask_count,
+            "parallel_groups": self.parallel_groups,
+            "max_observed_concurrency": self.max_observed_concurrency,
+            "launch_barrier_count": self.launch_barrier_count,
+            "overlap_observation": self.overlap_observation,
+            "parent_mutation_count": self.parent_mutation_count,
+            "approval_prompt_count": self.approval_prompt_count,
+            "worker_count": self.worker_count,
+            "write_worker_count": self.write_worker_count,
+            "verifier_count": self.verifier_count,
+            "subtask_trace": self.subtask_trace,
+            "telemetry_scope": self.telemetry_scope,
+            "telemetry_provenance": self.telemetry_provenance,
         }
 
 
 AdapterFactory = Callable[[Path], OrcaAdapter]
+
+
+class TaskDecomposer:
+    """Small, deterministic fan-out planner; deliberately not a general DAG engine."""
+
+    _DOMAINS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+        ("rules", ("업무규칙", "정책", "agents.md", "project rules", "policy", "requirements"),
+         ("AGENTS.md", "project rule documents")),
+        ("code", ("api", "코드 흐름", "구현 흐름", "code flow", "implementation flow"),
+         ("application code", "API boundaries")),
+        ("tests", ("테스트", "회귀", "test", "regression"), ("tests", "test configuration")),
+    )
+
+    @classmethod
+    def decompose(cls, task: str, plan: RoutingPlan) -> tuple[SubtaskSpec, ...]:
+        investigation = next((route for route in plan.routes if route.phase is Phase.INVESTIGATION), None)
+        lowered = " ".join(task.lower().split())
+        matches = [item for item in cls._DOMAINS if any(signal in lowered for signal in item[1])]
+        explicit_parallel = any(signal in lowered for signal in (
+            "각각 조사", "병렬", "동시에 조사", "independently inspect", "in parallel",
+        ))
+        if investigation is None and explicit_parallel and len(matches) >= 2:
+            implementation = next(
+                (route for route in plan.routes if route.phase is Phase.IMPLEMENTATION), None
+            )
+            if implementation is not None:
+                investigation = replace(
+                    implementation,
+                    phase=Phase.INVESTIGATION,
+                    role="Focused Investigator",
+                    authority=Authority.READ_ONLY,
+                    approval_grade="SAFE",
+                    automatic_review=False,
+                    requires_assessment=False,
+                )
+        if investigation is None:
+            return ()
+        if len(matches) < 2 or (plan.level not in {"complex", "critical"} and not explicit_parallel):
+            return ()
+        return tuple(
+            SubtaskSpec(
+                subtask_id=f"read-{name}",
+                objective=f"Independently inspect {name} evidence relevant to the user task.",
+                dependencies=(),
+                route=investigation,
+                affected_scope=scope,
+                can_parallelize=True,
+                parallel_group="read-discovery",
+            )
+            for name, _signals, scope in matches[:3]
+        )
 
 
 def _fresh_verifier(effort: str = "medium") -> Route:
@@ -593,11 +693,24 @@ class ProductionRunner:
             max_xhigh_attempts_per_run=max_xhigh_attempts_per_run,
             evidence_repair_limit=evidence_repair_limit_per_gate)
 
-    def run(self, task: str, workspace: str | Path) -> RunResult:
+    def run(self, task: str | RunRequest, workspace: str | Path | None = None,
+            metadata: RunMetadata | None = None) -> RunResult:
         started = time.monotonic()
-        root = Path(workspace).resolve()
+        if isinstance(task, RunRequest):
+            request = task
+        else:
+            if workspace is None:
+                raise ValueError("workspace is required")
+            request = RunRequest(task=task, workspace=str(workspace), metadata=metadata or RunMetadata())
+        task = request.task
+        root = Path(request.workspace).resolve()
         plan = self.router.classify(task)
-        result = RunResult(None, str(root), plan.level, routing_plan=plan.to_dict())
+        result = RunResult(
+            None, str(root), plan.level, routing_plan=plan.to_dict(),
+            delegated_by_parent=request.metadata.delegated_by_parent,
+            preapproved=request.metadata.preapproved,
+            interaction_mode=request.metadata.interaction_mode.value,
+        )
         if plan.verifier == "required":
             result.verification_decision = "required"
             result.verification_mode = VerificationMode.HYBRID.value
@@ -606,7 +719,12 @@ class ProductionRunner:
             result.verification_decision = "conditional-deterministic-first"
         try:
             adapter = self.adapter_factory(root)
-            run_id = adapter.create_run(task)
+            create_parameters = inspect.signature(adapter.create_run).parameters
+            if "metadata" in create_parameters:
+                run_id = adapter.create_run(task, metadata=request.metadata.to_dict())
+            else:
+                # Test/custom adapters written against the v0.2 interface remain valid.
+                run_id = adapter.create_run(task)
             result.run_id = run_id
         except Exception as exc:
             result.phase_list.append(PhaseResult("startup", "Coordinator", "", "", "", PhaseStatus.BLOCKED, error=str(exc)))
@@ -616,6 +734,89 @@ class ProductionRunner:
         completed_phases: set[Phase] = set()
         queue: list[tuple[Route, str]] = [(route, f"{route.phase.value}-{index + 1}") for index, route in enumerate(plan.routes)]
         run_xhigh_count = 0
+        subtasks = TaskDecomposer.decompose(task, plan)
+        if subtasks:
+            result.subtask_count = len(subtasks)
+            result.parallel_groups = [{
+                "parallel_group": "read-discovery",
+                "subtask_ids": [item.subtask_id for item in subtasks],
+            }]
+            fanout_budget = {"attempts": result.cost_metrics.attempt_count, "xhigh_attempts": 0}
+            fanout_outcome = self._run_read_fanout(
+                adapter, run_id, task, subtasks, result, _run_budget=fanout_budget
+            )
+            run_xhigh_count = fanout_budget["xhigh_attempts"]
+            if not fanout_outcome.success:
+                result.cost_metrics.elapsed_time = time.monotonic() - started
+                self._finalize_telemetry(result)
+                return result
+            completed_phases.add(Phase.INVESTIGATION)
+            queue = [(route, gate_id) for route, gate_id in queue if route.phase is not Phase.INVESTIGATION]
+            if fanout_outcome.risk_floor_rank is not None:
+                result.classification = "critical"
+                floor = fanout_outcome.risk_floor_rank
+                protected: list[tuple[Route, str]] = []
+                has_verifier = False
+                has_assessment = False
+                for pending_route, pending_gate in queue:
+                    if pending_route.authority is Authority.WORKSPACE_WRITE:
+                        pending_route = replace(
+                            apply_risk_floor(pending_route, floor),
+                            requires_assessment=True,
+                        )
+                    elif pending_route.phase is Phase.VERIFICATION:
+                        pending_route = replace(
+                            apply_risk_floor(pending_route, floor),
+                            authority=Authority.READ_ONLY,
+                            approval_grade="SAFE",
+                        )
+                        has_verifier = True
+                    elif pending_route.phase is Phase.ASSESSMENT:
+                        pending_route = replace(
+                            apply_risk_floor(pending_route, floor),
+                            authority=Authority.READ_ONLY,
+                            approval_grade="SAFE",
+                        )
+                        has_assessment = True
+                    protected.append((pending_route, pending_gate))
+                model, effort = capability_at(floor)
+                if not has_assessment:
+                    protected.insert(0, (
+                        Route(Phase.ASSESSMENT, "Risk Assessor", model, effort,
+                              Authority.READ_ONLY, "SAFE"),
+                        "assessment-fanout-risk",
+                    ))
+                if any(route.authority is Authority.WORKSPACE_WRITE for route, _gate in protected) and not has_verifier:
+                    protected.append((
+                        Route(Phase.VERIFICATION, "Fresh Verifier", model, effort,
+                              Authority.READ_ONLY, "SAFE"),
+                        "verification-fanout-risk",
+                    ))
+                queue = protected
+                result.verification_decision = "required-by-fanout-risk-floor"
+                result.verification_mode = VerificationMode.HYBRID.value
+                result.verifier_required_reason = fanout_outcome.risk_finding
+                result.routing_plan["fanout_risk_floor"] = {
+                    "rank": floor,
+                    "signature": fanout_outcome.risk_signature,
+                    "finding": fanout_outcome.risk_finding,
+                }
+            downstream = next((gate_id for route, gate_id in queue
+                               if route.phase in {Phase.IMPLEMENTATION, Phase.ASSESSMENT}), None)
+            if downstream:
+                downstream_route = next(route for route, gate_id in queue if gate_id == downstream)
+                gate = result.logical_gates.setdefault(
+                    downstream,
+                    LogicalGateState(downstream, downstream_route.phase.value, downstream_route.authority.value),
+                )
+                bounded = [
+                    fact
+                    for fanout_gate in result.logical_gates.values()
+                    if fanout_gate.logical_gate_id.startswith("fanout-")
+                    for fact in fanout_gate.verified_facts
+                ][:20]
+                gate.verified_facts.extend(bounded)
+        run_active_mutation_attempt: str | None = None
         while queue and result.cost_metrics.attempt_count < self.max_attempts_per_run:
             route, gate_id = queue.pop(0)
             gate = result.logical_gates.setdefault(gate_id, LogicalGateState(gate_id, route.phase.value, route.authority.value))
@@ -629,7 +830,7 @@ class ProductionRunner:
                 result.phase_list.append(PhaseResult(route.phase.value, route.role, route.model, route.effort,
                     route.authority.value, PhaseStatus.BLOCKED, gate_id, error="Critical WRITE blocked until assessment succeeds"))
                 result.final_status = PhaseStatus.BLOCKED; break
-            if route.authority is Authority.WORKSPACE_WRITE and gate.active_mutation_attempt:
+            if route.authority is Authority.WORKSPACE_WRITE and (gate.active_mutation_attempt or run_active_mutation_attempt):
                 result.final_status = PhaseStatus.BLOCKED; break
 
             attempt_no = len(gate.attempts) + 1
@@ -649,6 +850,7 @@ class ProductionRunner:
             gate.capability_ranks_used.add(capability_rank(route))
             if route.authority is Authority.WORKSPACE_WRITE:
                 gate.active_mutation_attempt = attempt_id
+                run_active_mutation_attempt = attempt_id
             phase = PhaseResult(route.phase.value, route.role, route.model, route.effort, route.authority.value,
                                 PhaseStatus.BLOCKED, gate_id, attempt_id, attempt_no)
             worker: WorkerHandle | None = None
@@ -1090,6 +1292,8 @@ class ProductionRunner:
                     cleanup_ok_for_attempt = isinstance(cleanup, Mapping) and cleanup.get("state") in {"released", "closed"}
                 if cleanup_ok_for_attempt:
                     gate.active_mutation_attempt = None
+                    if run_active_mutation_attempt == attempt_id:
+                        run_active_mutation_attempt = None
                 result.phase_list.append(phase)
             if not cleanup_ok_for_attempt:
                 gate.status = "TERMINAL"
@@ -1131,7 +1335,491 @@ class ProductionRunner:
         elif not cleanup_ok:
             result.final_status = PhaseStatus.FAILED
         result.cost_metrics.elapsed_time = time.monotonic() - started
+        self._finalize_telemetry(result)
         return result
+
+    @staticmethod
+    def _finalize_telemetry(result: RunResult) -> None:
+        result.worker_count = result.cost_metrics.worker_count
+        if result.worker_count:
+            result.max_observed_concurrency = max(result.max_observed_concurrency, 1)
+        result.write_worker_count = sum(
+            phase.dispatch_id is not None and phase.authority == Authority.WORKSPACE_WRITE.value
+            for phase in result.phase_list
+        )
+        result.verifier_count = sum(
+            phase.dispatch_id is not None and phase.phase == Phase.VERIFICATION.value
+            for phase in result.phase_list
+        )
+
+    def _run_read_fanout(self, adapter: OrcaAdapter, run_id: str, task: str,
+                         subtasks: Sequence[SubtaskSpec], result: RunResult,
+                         *, allow_retry: bool = True,
+                         _run_budget: dict[str, int] | None = None) -> FanoutOutcome:
+        """Launch a bounded READ group before any wait, then join in coordinator order.
+
+        OrcaAdapter inbox state is coordinator-owned and not thread-safe, so waiting
+        remains sequential after the launch barrier. The barrier enables overlap,
+        but runtime/UI timestamps—not launch order alone—are required to prove it.
+        """
+        run_budget = _run_budget if _run_budget is not None else {
+            "attempts": result.cost_metrics.attempt_count,
+            "xhigh_attempts": 0,
+        }
+        active: list[tuple[SubtaskSpec, LogicalGateState, AttemptMetadata, PhaseResult,
+                           WorkerHandle, float]] = []
+        baseline = dict(adapter.change_detector())
+        unstarted_failure: tuple[LogicalGateState, AttemptMetadata, PhaseResult, float] | None = None
+        try:
+            for spec in subtasks[:3]:
+                gate_id = f"fanout-{spec.subtask_id}"
+                gate = result.logical_gates.setdefault(
+                    gate_id, LogicalGateState(gate_id, spec.route.phase.value, spec.route.authority.value)
+                )
+                gate.root_gate_id = gate_id
+                gate.baseline_changes = dict(baseline)
+                if len(gate.attempts) >= self.max_attempts_per_gate:
+                    result.final_status = PhaseStatus.FAILED
+                    result.adaptive_decisions.append({
+                        "logical_gate_id": gate_id,
+                        "decision": AdaptiveDecision.TERMINAL.value,
+                        "decision_reason": "fan-out logical Gate attempt budget exhausted",
+                    })
+                    return FanoutOutcome(False)
+                if run_budget["attempts"] >= self.max_attempts_per_run:
+                    result.adaptive_decisions.append({
+                        "logical_gate_id": gate_id,
+                        "decision": AdaptiveDecision.TERMINAL.value,
+                        "decision_reason": "fan-out global attempt fuse exhausted",
+                    })
+                    raise RuntimeError("fan-out global attempt fuse exhausted")
+                if (spec.route.effort == "xhigh"
+                        and run_budget["xhigh_attempts"] >= self.engine.max_xhigh_attempts_per_run):
+                    result.adaptive_decisions.append({
+                        "logical_gate_id": gate_id,
+                        "decision": AdaptiveDecision.TERMINAL.value,
+                        "decision_reason": "fan-out run-scoped xhigh budget exhausted",
+                    })
+                    raise RuntimeError("fan-out run-scoped xhigh budget exhausted")
+                attempt_no = len(gate.attempts) + 1
+                attempt_id = f"{gate_id}-attempt-{attempt_no}"
+                started = time.monotonic()
+                attempt = AttemptMetadata(
+                    gate_id, attempt_id, attempt_no,
+                    gate.attempts[-1].attempt_id if gate.attempts else None,
+                    spec.route.phase.value, spec.route.model, spec.route.effort,
+                    capability_rank(spec.route), spec.route.authority.value,
+                    workspace_fingerprint=self._workspace_fingerprint(Path(result.workspace), baseline),
+                )
+                gate.attempts.append(attempt)
+                gate.capability_ranks_used.add(capability_rank(spec.route))
+                phase = PhaseResult(
+                    spec.route.phase.value, spec.route.role, spec.route.model, spec.route.effort,
+                    spec.route.authority.value, PhaseStatus.BLOCKED, gate_id, attempt_id, attempt_no,
+                )
+                subtask_task = (
+                    f"{task}\n\nFocused subtask {spec.subtask_id}: {spec.objective} "
+                    f"Scope: {', '.join(spec.affected_scope)}. Exclude unrelated domains."
+                )
+                phase_spec = self._phase_spec(subtask_task, spec.route, gate, EvidencePacket(gate_id))
+                attempt.phase_spec_size = len(phase_spec.encode())
+                task_id = adapter.create_task(run_id, f"{spec.route.role} [{spec.subtask_id}]", phase_spec)
+                phase.task_id = task_id
+                try:
+                    worker = adapter.start_worker(run_id, task_id, spec.route)
+                    run_budget["attempts"] += 1
+                    if spec.route.effort == "xhigh":
+                        run_budget["xhigh_attempts"] += 1
+                except Exception as start_exc:
+                    phase.error = f"worker launch failed: {start_exc}"
+                    gate.status = "FAILED"
+                    try:
+                        adapter.fail_task(run_id, task_id, phase.error)
+                    except Exception as settlement_exc:
+                        phase.error += f"; task settlement failed: {settlement_exc}"
+                    unstarted_failure = (gate, attempt, phase, started)
+                    raise
+                phase.dispatch_id = worker.dispatch_id
+                active.append((spec, gate, attempt, phase, worker, started))
+                result.subtask_trace.append({
+                    "subtask_id": spec.subtask_id,
+                    "parallel_group": spec.parallel_group,
+                    "event": "started",
+                    "timestamp": started,
+                    "task_id": task_id,
+                    "dispatch_id": worker.dispatch_id,
+                })
+            result.launch_barrier_count = max(result.launch_barrier_count, len(active))
+        except Exception as exc:
+            terminal_failure = False
+            result.launch_barrier_count = max(result.launch_barrier_count, len(active))
+            for _spec, gate, attempt, phase, worker, started in active:
+                settlement_error = self._settle_failed_fanout(
+                    adapter, run_id, worker, f"fan-out launch failed: {exc}",
+                    already_settled=False,
+                )
+                try:
+                    cleanup = adapter.release(worker)
+                except Exception as cleanup_exc:
+                    cleanup = {"state": "release_failed", "error": str(cleanup_exc)}
+                phase.cleanup = cleanup
+                phase.error = f"fan-out launch failed: {exc}"
+                if settlement_error:
+                    phase.error += f"; settlement failed: {settlement_error}"
+                    terminal_failure = True
+                attempt.elapsed_time = time.monotonic() - started
+                result.cost_metrics.record(_spec.route, attempt.elapsed_time)
+                result.cleanup_result.append(cleanup)
+                result.phase_list.append(phase)
+                if not isinstance(cleanup, Mapping) or cleanup.get("state") not in {"released", "closed"}:
+                    terminal_failure = True
+            if unstarted_failure is not None:
+                gate, attempt, phase, started = unstarted_failure
+                attempt.elapsed_time = time.monotonic() - started
+                result.phase_list.append(phase)
+                if "task settlement failed" in (phase.error or ""):
+                    terminal_failure = True
+            result.final_status = PhaseStatus.BLOCKED
+            if terminal_failure:
+                result.adaptive_decisions.append({
+                    "decision": AdaptiveDecision.TERMINAL.value,
+                    "decision_reason": "fan-out launch cleanup or settlement failed",
+                })
+            return FanoutOutcome(False)
+
+        failed: list[SubtaskSpec] = []
+        capability_escalations: list[SubtaskSpec] = []
+        risk_outcome: FanoutOutcome | None = None
+        risk_findings: list[str] = []
+        terminal_resource_failure = False
+        terminal_outcome = False
+        blocked_outcome = False
+        for spec, gate, attempt, phase, worker, attempt_started in active:
+            completion: Mapping[str, Any] = {}
+            normalized = NormalizedWorkerResult("unknown", "")
+            lifecycle_settled = False
+            try:
+                completion = adapter.wait_for_completion(run_id, worker, self.timeout_ms)
+                mode = completion.get("mode")
+                lifecycle_settled = mode == "worker_done"
+                explicit_failure: FailureClassification | None = None
+                forced_decision: AdaptiveDecision | None = None
+                forced_reason: str | None = None
+                if mode == "question":
+                    question = _summary(completion.get("message", completion))
+                    normalized = NormalizedWorkerResult(
+                        "BLOCKED", question, reason="fan-out worker requires user action",
+                        needs_user_input=True, evidence=(question,) if question else (),
+                    )
+                    explicit_failure = FailureClassification(
+                        FailureClass.USER_ACTION_REQUIRED, "high", "question_event",
+                        (question,) if question else (),
+                    )
+                    forced_decision = AdaptiveDecision.BLOCKED
+                    forced_reason = "question event requires user action; sibling retry is forbidden"
+                elif mode == "escalation":
+                    message_payload = completion.get("message", completion)
+                    finding = _summary(message_payload)
+                    adapter.settle_escalation(run_id, worker, finding)
+                    lifecycle_settled = True
+                    message_fields = dict(message_payload) if isinstance(message_payload, Mapping) else {}
+                    escalation_evidence = _strings(message_fields.get("evidence"))
+                    escalation_questions = _strings(message_fields.get("unresolved_questions"))
+                    attempted_hypotheses = _strings(
+                        message_fields.get("attempted_hypotheses")
+                        or message_fields.get("attempted_actions")
+                    )
+                    normalized = NormalizedWorkerResult(
+                        "FAILED", finding, failure_class_hint="CAPABILITY_FAILURE",
+                        reason="fan-out worker requested Coordinator reclassification",
+                        evidence=escalation_evidence or ((finding,) if finding else ()),
+                        unresolved_questions=escalation_questions,
+                        fields=message_fields,
+                    )
+                    finding_brief = self.router.normalize(finding)
+                    if finding_brief.positive_risk_signals:
+                        high_risk = "SOL_HIGH_RISK" in finding_brief.requested_actions
+                        floor = 4 if high_risk else 3
+                        explicit_failure = FailureClassification(
+                            FailureClass.CAPABILITY_FAILURE, "high",
+                            "confirmed_risk_floor_high" if high_risk else "confirmed_risk_floor",
+                            (finding,) if finding else (),
+                        )
+                        forced_decision = AdaptiveDecision.APPLY_RISK_FLOOR
+                        forced_reason = f"fan-out finding applies risk floor rank {floor}"
+                        if finding and finding not in risk_findings:
+                            risk_findings.append(finding[:500])
+                        bounded_findings = tuple(risk_findings[:8])
+                        combined_finding = " | ".join(bounded_findings)[:2_000]
+                        prior_floor = risk_outcome.risk_floor_rank if risk_outcome else None
+                        aggregate_floor = max(prior_floor or 0, floor)
+                        risk_outcome = FanoutOutcome(
+                            True, aggregate_floor,
+                            hashlib.sha256(
+                                "\n".join(sorted(bounded_findings)).encode()
+                            ).hexdigest(),
+                            combined_finding,
+                        )
+                    else:
+                        xhigh_evidence_ready = (
+                            spec.route.model == SOL and spec.route.effort == "high"
+                            and len(escalation_evidence) >= 2
+                            and len(attempted_hypotheses) >= 2
+                            and bool(escalation_questions)
+                        )
+                        explicit_failure = FailureClassification(
+                            FailureClass.CAPABILITY_FAILURE, "high",
+                            "verified_capability_limit" if xhigh_evidence_ready else "worker_escalation",
+                            escalation_evidence or ((finding,) if finding else ()),
+                        )
+                elif mode == "timeout" and completion.get("safe_to_read", True) is False:
+                    normalized = NormalizedWorkerResult(
+                        "FAILED", "unsafe fan-out lifecycle timeout",
+                        reason="no safe result evidence before lifecycle deadline",
+                    )
+                    explicit_failure = FailureClassification(
+                        FailureClass.ORCHESTRATION_FAILURE, "high",
+                        "lifecycle_deadline_exhausted",
+                    )
+                    forced_decision = AdaptiveDecision.TERMINAL
+                    forced_reason = "unsafe timeout is an orchestration failure, not a model failure"
+                else:
+                    raw = completion.get("result") if isinstance(completion.get("result"), Mapping) else None
+                    if raw is None and completion.get("safe_to_read", True) is not False:
+                        raw = adapter.read_result(worker)
+                    normalized = ResultNormalizer.normalize(raw or {})
+                changes = self._changed_paths(baseline, dict(adapter.change_detector()))
+                evidence_ok, reason = SuccessEvidenceGate.evaluate(spec.route, normalized, changes)
+                if changes:
+                    evidence_ok = False
+                    reason = "READ fan-out modified the workspace"
+                if completion.get("mode") == "timeout" and evidence_ok:
+                    adapter.trusted_relay(run_id, worker, normalized.summary, files_modified=changes)
+                    phase.settlement = "coordinator_trusted_relay"
+                elif completion.get("mode") == "worker_done" and evidence_ok:
+                    phase.settlement = "worker_done"
+                else:
+                    evidence_ok = False
+                phase.worker_result = normalized.public()
+                attempt.files_changed = tuple(changes)
+                attempt.relevant_evidence_refs = normalized.evidence[:20]
+                attempt.unresolved_questions = normalized.unresolved_questions[:20]
+                if evidence_ok:
+                    phase.status = PhaseStatus.SUCCESS
+                    gate.status = "SUCCESS"
+                    gate.verified_facts.extend(tuple(dict.fromkeys((
+                        normalized.summary, *normalized.evidence,
+                        *_strings(normalized.fields.get("conclusion")),
+                    )))[:8])
+                else:
+                    phase.error = reason
+                    gate.status = "FAILED"
+                    failure = explicit_failure or FailureClassifier.classify(
+                        spec.route, completion, normalized, reason
+                    )
+                    decision, decision_reason = ((forced_decision, forced_reason)
+                                                 if forced_decision is not None else
+                                                 self.engine.decide(
+                                                     gate, spec.route, failure,
+                                                     material_new_evidence=True,
+                                                     run_xhigh_count=run_budget["xhigh_attempts"],
+                                                 ))
+                    assert decision is not None and decision_reason is not None
+                    attempt.failure_class = failure.failure_class.value
+                    attempt.classification_confidence = failure.confidence
+                    attempt.decision = decision.value
+                    attempt.decision_reason = decision_reason
+                    retryable_failure = failure.failure_class in {
+                        FailureClass.INSUFFICIENT_SUCCESS_EVIDENCE,
+                        FailureClass.EVIDENCE_GAP,
+                        FailureClass.RECOVERABLE_IMPLEMENTATION_FAILURE,
+                    }
+                    if decision in {
+                        AdaptiveDecision.COLLECT_EVIDENCE,
+                        AdaptiveDecision.RESULT_REPAIR,
+                        AdaptiveDecision.RETRY_SAME_CAPABILITY,
+                    } and not retryable_failure:
+                        decision = AdaptiveDecision.TERMINAL
+                        decision_reason = ("fan-out retry is restricted to evidence-gap or "
+                                           "recoverable failure classes")
+                        attempt.decision = decision.value
+                        attempt.decision_reason = decision_reason
+                    if decision in {
+                        AdaptiveDecision.COLLECT_EVIDENCE,
+                        AdaptiveDecision.RESULT_REPAIR,
+                        AdaptiveDecision.RETRY_SAME_CAPABILITY,
+                    } and retryable_failure:
+                        failed.append(spec)
+                    elif decision is AdaptiveDecision.ESCALATE_CAPABILITY:
+                        prior_escalations = sum(
+                            prior.decision == AdaptiveDecision.ESCALATE_CAPABILITY.value
+                            for prior in gate.attempts[:-1]
+                        )
+                        advanced = next_capability(spec.route)
+                        if (prior_escalations >= self.capability_attempt_limit_per_gate
+                                or advanced is None
+                                or capability_rank(advanced) in gate.capability_ranks_used):
+                            decision = AdaptiveDecision.TERMINAL
+                            decision_reason = "fan-out capability budget, ceiling, or repeated rank reached"
+                            attempt.decision = decision.value
+                            attempt.decision_reason = decision_reason
+                            terminal_outcome = True
+                        else:
+                            capability_escalations.append(replace(
+                                spec, route=advanced, can_parallelize=False, parallel_group=None
+                            ))
+                            phase.status = PhaseStatus.ESCALATION_REQUESTED
+                            gate.status = "SUPERSEDED"
+                            if normalized.evidence:
+                                gate.verified_facts.extend(normalized.evidence[:8])
+                    elif decision is AdaptiveDecision.APPLY_RISK_FLOOR:
+                        phase.status = PhaseStatus.ESCALATION_REQUESTED
+                        gate.status = "SUPERSEDED"
+                        if normalized.evidence:
+                            gate.verified_facts.extend(normalized.evidence[:8])
+                    else:
+                        terminal_outcome = True
+                        blocked_outcome = blocked_outcome or decision is AdaptiveDecision.BLOCKED
+                    result.adaptive_decisions.append({
+                        "logical_gate_id": gate.logical_gate_id,
+                        "attempt_id": attempt.attempt_id,
+                        "failure_class": failure.failure_class.value,
+                        "decision": decision.value,
+                        "decision_reason": decision_reason,
+                    })
+            except Exception as exc:
+                phase.error = str(exc)
+                gate.status = "FAILED"
+                terminal_outcome = True
+                failure = FailureClassification(
+                    FailureClass.ORCHESTRATION_FAILURE, "high",
+                    "fanout_result_or_lifecycle_error", (str(exc)[:500],),
+                )
+                attempt.failure_class = failure.failure_class.value
+                attempt.classification_confidence = failure.confidence
+                attempt.decision = AdaptiveDecision.TERMINAL.value
+                attempt.decision_reason = "fan-out result/lifecycle exception is not a model failure"
+                result.adaptive_decisions.append({
+                    "logical_gate_id": gate.logical_gate_id,
+                    "attempt_id": attempt.attempt_id,
+                    "failure_class": failure.failure_class.value,
+                    "decision": AdaptiveDecision.TERMINAL.value,
+                    "decision_reason": attempt.decision_reason,
+                })
+            finally:
+                if gate.status == "FAILED":
+                    settlement_error = self._settle_failed_fanout(
+                        adapter, run_id, worker,
+                        phase.error or "READ fan-out subtask failed",
+                        already_settled=lifecycle_settled,
+                    )
+                    if settlement_error:
+                        phase.error = f"{phase.error or 'subtask failed'}; settlement failed: {settlement_error}"
+                        terminal_resource_failure = True
+                ended = time.monotonic()
+                attempt.elapsed_time = ended - attempt_started
+                result.cost_metrics.record(spec.route, attempt.elapsed_time)
+                try:
+                    cleanup = adapter.release(worker)
+                except Exception as exc:
+                    cleanup = {"state": "release_failed", "error": str(exc)}
+                phase.cleanup = cleanup
+                result.cleanup_result.append(cleanup)
+                result.phase_list.append(phase)
+                result.subtask_trace.append({
+                    "subtask_id": spec.subtask_id,
+                    "parallel_group": spec.parallel_group,
+                    "event": "finished",
+                    "timestamp": ended,
+                    "status": phase.status.value,
+                })
+                if not isinstance(cleanup, Mapping) or cleanup.get("state") not in {"released", "closed"}:
+                    terminal_resource_failure = True
+
+        if terminal_resource_failure or terminal_outcome:
+            result.final_status = PhaseStatus.BLOCKED if blocked_outcome else PhaseStatus.FAILED
+            result.adaptive_decisions.append({
+                "decision": AdaptiveDecision.TERMINAL.value,
+                "decision_reason": ("fan-out sibling settlement/cleanup failed after full drain"
+                                    if terminal_resource_failure else
+                                    "fan-out child outcome is not safely retryable"),
+            })
+            return FanoutOutcome(False)
+
+        for escalated in capability_escalations:
+            if risk_outcome is not None and risk_outcome.risk_floor_rank is not None:
+                escalated = replace(
+                    escalated,
+                    route=apply_risk_floor(escalated.route, risk_outcome.risk_floor_rank),
+                )
+            escalated_outcome = self._run_read_fanout(
+                adapter, run_id, task, (escalated,), result, allow_retry=allow_retry,
+                _run_budget=run_budget,
+            )
+            if not escalated_outcome.success:
+                return escalated_outcome
+            if escalated_outcome.risk_floor_rank is not None:
+                combined = tuple(dict.fromkeys(filter(None, (
+                    risk_outcome.risk_finding if risk_outcome else None,
+                    escalated_outcome.risk_finding,
+                ))))[:8]
+                combined_finding = " | ".join(combined)[:2_000]
+                risk_outcome = FanoutOutcome(
+                    True,
+                    max(risk_outcome.risk_floor_rank if risk_outcome else 0,
+                        escalated_outcome.risk_floor_rank),
+                    hashlib.sha256("\n".join(sorted(combined)).encode()).hexdigest(),
+                    combined_finding,
+                )
+
+        if risk_outcome is not None:
+            result.final_status = PhaseStatus.SUCCESS
+            return risk_outcome
+
+        if failed and not allow_retry:
+            result.final_status = PhaseStatus.FAILED
+            return FanoutOutcome(False)
+        if failed:
+            # Successful siblings are preserved. Retry each failed READ subtask once
+            # with a narrower, material-delta objective; never replay the group.
+            for spec in failed:
+                focused = replace(
+                    spec,
+                    objective=(spec.objective + " Retry only missing concrete evidence and explicitly list "
+                               "files/tools checked; do not repeat the prior broad strategy."),
+                    can_parallelize=False,
+                    parallel_group=None,
+                )
+                result.adaptive_decisions.append({
+                    "logical_gate_id": f"fanout-{spec.subtask_id}",
+                    "decision": AdaptiveDecision.RETRY_SAME_CAPABILITY.value,
+                    "decision_reason": "focused sibling-only evidence retry",
+                    "retry_delta": "narrowed evidence contract",
+                    "material_new_evidence": True,
+                })
+                if not self._run_read_fanout(
+                    adapter, run_id, task, (focused,), result, allow_retry=False,
+                    _run_budget=run_budget,
+                ).success:
+                    return FanoutOutcome(False)
+        result.final_status = PhaseStatus.SUCCESS
+        return FanoutOutcome(True)
+
+    @staticmethod
+    def _settle_failed_fanout(adapter: OrcaAdapter, run_id: str, worker: WorkerHandle,
+                              reason: str, *, already_settled: bool) -> str | None:
+        """Fence an unsettled failed subtask without duplicating worker_done settlement."""
+        if already_settled:
+            return None
+        try:
+            fail_worker = getattr(adapter, "fail_worker", None)
+            if callable(fail_worker):
+                fail_worker(run_id, worker, reason)
+            else:
+                adapter.fail_task(run_id, worker.task_id, reason)
+        except Exception as exc:
+            return str(exc)
+        return None
 
     @staticmethod
     def _phase_spec(task: str, route: Route, gate: LogicalGateState | None = None,

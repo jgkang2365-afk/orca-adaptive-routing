@@ -1,6 +1,62 @@
 # Adaptive Model Routing Policy
 
-Version: 0.2.1
+Version: 0.3.0
+
+## Parent delegation and bounded fan-out
+
+The supported default integration point is the installed implicit
+`orca-adaptive-routing` skill. For mutations and multi-file work the Parent
+invokes `orca-adaptive run` with `--delegated-by-parent`; explicit user
+preapproval is represented by `--preapproved --interaction-mode
+no-intervention`. These values are Run metadata, not filesystem authority.
+Preapproval never changes a route's sandbox or turns a blocked high-risk action
+into an approval prompt.
+
+The runner has a deliberately small decomposition policy. When a task has at
+least two independent policy/rules, code/API, and test investigation domains,
+it creates at most three READ subtasks in one parallel group. All workers start
+before the Coordinator begins its sequential lifecycle waits, so work overlaps
+without racing the adapter's shared inbox. Results are joined as bounded facts;
+successful siblings are retained when one focused subtask is retried. Mutation
+remains fenced to one run-level Lead WRITE owner, followed by a separate
+verifier only when the existing policy requires it.
+
+A fan-out capability finding settles and releases the reporting worker, then
+re-dispatches only that logical sibling at exactly the next capability while
+preserving READ_ONLY authority and successful sibling facts. A newly confirmed
+critical risk instead returns a typed risk-floor outcome to the outer queue:
+the pending mutation is protected by a separate READ_ONLY assessment, the
+minimum Sol floor, and an independent READ_ONLY verifier. Questions, external
+blockers, unsafe timeouts, and orchestration/settlement failures never enter
+this retry path.
+
+Multiple sibling risk findings are joined with a bounded combined signature;
+the maximum discovered floor is monotonic and cannot be overwritten by a later
+lower-risk result. A risk result does not short-circuit another unresolved
+sibling escalation. Fan-out attempts consume the same run hard fuse and shared
+xhigh budget as the outer loop, and Sol/high can reach the single READ_ONLY
+xhigh attempt only with multiple concrete evidence items, multiple attempted
+hypotheses, and an unresolved question.
+
+Run telemetry adds delegation, interaction, subtask, parallel group, launch
+barrier, conservative observed concurrency, Parent mutation, approval prompt,
+worker, WRITE-worker, verifier, and timestamped subtask trace fields. A launch
+barrier shows that workers were started before the first wait; it does not alone
+prove runtime overlap. The Parent mutation and prompt counters cover
+Coordinator-owned execution; actual UI/runtime E2E timestamps are required to
+prove host behavior and overlapping execution.
+
+Production installation exposes one exact commit-object Skill payload through
+the shared agent Skill root, the normal CODEX_HOME discovery root, and an
+existing Orca-managed Codex runtime home. A fifth installer argument can set the
+Orca-managed root explicitly for isolated or candidate installs. Existing
+unmanaged directories fail closed; a recognized older named Skill is preserved
+as a one-time backup before it is replaced by the snapshot link.
+
+Implicit skill discovery is not a native hard Parent interceptor. If an Orca
+host does not load or honor the skill, repository code cannot forcibly prevent
+the Parent from using its own tools. Production acceptance therefore requires
+an actual Orca UI trace in addition to package tests.
 
 ## Purpose and boundaries
 

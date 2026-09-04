@@ -1,12 +1,14 @@
 # Orca Adaptive Routing
 
-Adaptive Coordinator v0.2.1 turns a task brief into a closed-loop routing plan
+Adaptive Coordinator v0.3.0 turns a task brief into a closed-loop routing plan
 and executes its logical Gates through Orca-supervised Codex workers.
 
 ```bash
 python3 -m adaptive_coordinator route "Inspect the repository and list Markdown files."
 python3 -m adaptive_coordinator launch "Inspect the repository and list Markdown files."
 orca-adaptive run "Inspect the repository and list Markdown files." --workspace "$PWD"
+orca-adaptive run "Implement the requested fix." --workspace "$PWD" \
+  --delegated-by-parent --preapproved --interaction-mode no-intervention
 orca-adaptive --version
 ```
 
@@ -24,6 +26,18 @@ only; capability never raises filesystem authority. Lifecycle completion is not
 task success: phase-specific evidence, unresolved-question, deterministic-test,
 target-identity, fencing, and cleanup Gates must all pass. Pull requests and
 main pushes run the `Adaptive Coordinator Quality / quality-gate` GitHub check.
+
+The packaged implicit skill is the supported Orca Parent entry point. It tells a
+Parent to delegate mutations and multi-file work, records preapproval as typed
+run metadata, and leaves implementation to supervised workers. For bounded
+multi-domain work the runner can launch up to three independent READ workers
+before joining their evidence into a single Lead WRITE Gate. This repository
+cannot install a native hard interceptor inside Orca; a host that does not load
+or honor the discoverable skill cannot be forced to delegate by package code.
+The production installer links the same commit-object Skill snapshot into the
+shared agent directory, the regular CODEX_HOME directory, and—when its runtime
+home exists—the Orca-managed Codex Skill directory. Unmanaged existing content
+is never overwritten.
 
 The Orca adapter uses the supported custom-argv path:
 

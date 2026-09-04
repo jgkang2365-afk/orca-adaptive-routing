@@ -86,6 +86,28 @@ class OrcaAdapterTests(unittest.TestCase):
         self.assertIn("never", command)
         self.assertNotIn("danger-full-access", command)
 
+    def test_run_metadata_is_carried_in_supported_objective_field(self) -> None:
+        commands = []
+
+        def runner(command):
+            commands.append(list(command))
+            return {"run": {"id": "run_parent"}}
+
+        adapter = OrcaAdapter(
+            "/home/user/project", runner=runner, change_detector=lambda: {},
+            worktree_selector=r"path:\\wsl.localhost\Ubuntu-24.04\home\user\project",
+        )
+        self.assertEqual(adapter.create_run(
+            "Implement the fix",
+            metadata={"delegated_by_parent": True, "preapproved": True,
+                      "interaction_mode": "no-intervention"},
+        ), "run_parent")
+        objective = commands[0][commands[0].index("--objective") + 1]
+        self.assertTrue(objective.startswith("[adaptive-run-metadata]"))
+        metadata_line, task = objective.split("\n", 1)
+        self.assertEqual(json.loads(metadata_line.removeprefix("[adaptive-run-metadata]"))["preapproved"], True)
+        self.assertEqual(task, "Implement the fix")
+
     def test_keepalive_documents_do_not_hide_final_orca_response(self) -> None:
         payload = _parse_orca_output(
             '{"_keepalive":true}\n{"ok":true,"result":{"messages":[]}}\n'

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orca-adaptive-routing"
-version = "0.2.1"
+version = "0.3.0"
 description = "Policy-driven Orca Coordinator routing and worker lifecycle adapter"
 requires-python = ">=3.11"
 

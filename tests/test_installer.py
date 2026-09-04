@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -29,9 +30,13 @@ class ProductionInstallerTests(unittest.TestCase):
         self.repo = root / "source"
         self.install = root / "install"
         self.bin = root / "bin"
+        self.skills = root / "skills"
+        self.codex_skills = root / "codex-skills"
+        self.orca_managed_skills = root / "orca-runtime-home" / "home" / "skills"
         (self.repo / "scripts").mkdir(parents=True)
         (self.repo / "adaptive_coordinator").mkdir()
         shutil.copy2(INSTALLER, self.repo / "scripts" / INSTALLER.name)
+        shutil.copytree(ROOT / "skills", self.repo / "skills")
         (self.repo / "adaptive_coordinator" / "__init__.py").write_text('VALUE = "committed"\n')
         (self.repo / "adaptive_coordinator" / "cli.py").write_text(
             "def main():\n"
@@ -60,6 +65,9 @@ class ProductionInstallerTests(unittest.TestCase):
             "scripts/install-production.sh",
             str(self.install),
             str(self.bin),
+            str(self.skills),
+            str(self.codex_skills),
+            str(self.orca_managed_skills),
             cwd=self.repo,
             check=False,
         )
@@ -68,6 +76,15 @@ class ProductionInstallerTests(unittest.TestCase):
         result = self.install_result()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.bin / "orca-adaptive").is_symlink())
+        skill = self.skills / "orca-adaptive-routing"
+        self.assertTrue(skill.is_symlink())
+        self.assertIn("allow_implicit_invocation: true", (skill / "agents" / "openai.yaml").read_text())
+        codex_skill = self.codex_skills / "orca-adaptive-routing"
+        self.assertTrue(codex_skill.is_symlink())
+        self.assertEqual(skill.resolve(), codex_skill.resolve())
+        orca_skill = self.orca_managed_skills / "orca-adaptive-routing"
+        self.assertTrue(orca_skill.is_symlink())
+        self.assertEqual(skill.resolve(), orca_skill.resolve())
 
     def test_i2_tracked_modification_is_rejected(self) -> None:
         (self.repo / "adaptive_coordinator" / "cli.py").write_text("changed = True\n")
@@ -127,6 +144,97 @@ class ProductionInstallerTests(unittest.TestCase):
         (self.repo / "adaptive_coordinator" / "__init__.py").write_text('VALUE = "dirty-source"\n')
         invoked = run(str(self.bin / "orca-adaptive"), cwd=self.repo)
         self.assertEqual(invoked.stdout.splitlines(), ["committed", self.commit])
+
+    def test_i7_existing_unmanaged_skill_is_not_replaced(self) -> None:
+        unmanaged = self.skills / "orca-adaptive-routing"
+        unmanaged.mkdir(parents=True)
+        marker = unmanaged / "KEEP"
+        marker.write_text("user-owned\n")
+        result = self.install_result()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unmanaged or already-backed-up skill installation", result.stderr)
+        self.assertEqual(marker.read_text(), "user-owned\n")
+        self.assertFalse((self.install / self.commit).exists())
+
+    def test_i8_existing_named_skill_is_preserved_then_replaced_by_snapshot_link(self) -> None:
+        existing = self.skills / "orca-adaptive-routing"
+        existing.mkdir(parents=True)
+        (existing / "SKILL.md").write_text("---\nname: orca-adaptive-routing\n---\nold\n")
+        result = self.install_result()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(existing.is_symlink())
+        backup = self.skills / "orca-adaptive-routing.pre-snapshot"
+        self.assertEqual((backup / "SKILL.md").read_text(), "---\nname: orca-adaptive-routing\n---\nold\n")
+        self.assertIn("Delegate multi-step project", (existing / "SKILL.md").read_text())
+
+    def test_i9_unmanaged_codex_discovery_skill_is_preserved_and_install_fails_closed(self) -> None:
+        unmanaged = self.codex_skills / "orca-adaptive-routing"
+        unmanaged.mkdir(parents=True)
+        marker = unmanaged / "KEEP"
+        marker.write_text("codex-owned\n")
+        result = self.install_result()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unmanaged or already-backed-up skill installation", result.stderr)
+        self.assertEqual(marker.read_text(), "codex-owned\n")
+        self.assertFalse((self.install / self.commit).exists())
+
+    def test_i10_unmanaged_orca_runtime_skill_is_preserved_and_install_fails_closed(self) -> None:
+        unmanaged = self.orca_managed_skills / "orca-adaptive-routing"
+        unmanaged.mkdir(parents=True)
+        marker = unmanaged / "KEEP"
+        marker.write_text("orca-runtime-owned\n")
+        result = self.install_result()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unmanaged or already-backed-up skill installation", result.stderr)
+        self.assertEqual(marker.read_text(), "orca-runtime-owned\n")
+        self.assertFalse((self.install / self.commit).exists())
+
+    def test_i11_existing_orca_runtime_home_is_auto_detected(self) -> None:
+        fake_home = Path(self.temp.name) / "home"
+        runtime_home = fake_home / ".local" / "share" / "orca" / "codex-runtime-home" / "home"
+        runtime_home.mkdir(parents=True)
+        environment = dict(os.environ, HOME=str(fake_home))
+        result = subprocess.run(
+            [
+                "bash", "scripts/install-production.sh", str(self.install), str(self.bin),
+                str(self.skills), str(self.codex_skills),
+            ],
+            cwd=self.repo, check=False, capture_output=True, text=True, env=environment,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        auto_skill = runtime_home / "skills" / "orca-adaptive-routing"
+        self.assertTrue(auto_skill.is_symlink())
+        self.assertEqual(auto_skill.resolve(), (self.skills / "orca-adaptive-routing").resolve())
+
+    def _assert_unmanaged_symlink_rejected(self, root: Path) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        foreign = Path(self.temp.name) / f"foreign-{root.name}"
+        foreign.mkdir()
+        (foreign / "SKILL.md").write_text("---\nname: foreign\n---\n")
+        (root / "orca-adaptive-routing").symlink_to(foreign, target_is_directory=True)
+        result = self.install_result()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unmanaged skill symlink", result.stderr)
+        self.assertEqual((foreign / "SKILL.md").read_text(), "---\nname: foreign\n---\n")
+        self.assertFalse((self.install / self.commit).exists())
+
+    def test_i12_unmanaged_shared_skill_symlink_is_rejected(self) -> None:
+        self._assert_unmanaged_symlink_rejected(self.skills)
+
+    def test_i13_unmanaged_codex_skill_symlink_is_rejected(self) -> None:
+        self._assert_unmanaged_symlink_rejected(self.codex_skills)
+
+    def test_i14_unmanaged_orca_skill_symlink_is_rejected(self) -> None:
+        self._assert_unmanaged_symlink_rejected(self.orca_managed_skills)
+
+    def test_i15_exact_snapshot_skill_links_are_idempotent(self) -> None:
+        first = self.install_result()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        second = self.install_result()
+        self.assertEqual(second.returncode, 0, second.stderr)
+        expected = self.install / self.commit / "orca-adaptive-routing-skill"
+        for root in (self.skills, self.codex_skills, self.orca_managed_skills):
+            self.assertEqual((root / "orca-adaptive-routing").resolve(), expected)
 
 
 if __name__ == "__main__":

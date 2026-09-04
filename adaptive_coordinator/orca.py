@@ -255,7 +255,10 @@ class OrcaAdapter:
         command += ["--no-alt-screen"]
         return command
 
-    def create_run(self, objective: str) -> str:
+    def create_run(self, objective: str, *, metadata: Mapping[str, object] | None = None) -> str:
+        if metadata:
+            envelope = json.dumps(metadata, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+            objective = f"[adaptive-run-metadata]{envelope}\n{objective}"
         result = self.runner(
             [self.executable, "orchestration", "run-create", "--objective", objective, "--json"]
         )

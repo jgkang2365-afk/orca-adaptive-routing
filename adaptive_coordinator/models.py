@@ -61,6 +61,60 @@ class VerificationMode(StrEnum):
     HYBRID = "HYBRID"
 
 
+class InteractionMode(StrEnum):
+    STANDARD = "standard"
+    NO_INTERVENTION = "no-intervention"
+
+
+@dataclass(frozen=True)
+class RunMetadata:
+    """Structured delegation state supplied by an Orca Parent."""
+
+    delegated_by_parent: bool = False
+    preapproved: bool = False
+    interaction_mode: InteractionMode = InteractionMode.STANDARD
+
+    def __post_init__(self) -> None:
+        if self.interaction_mode is InteractionMode.NO_INTERVENTION and not self.preapproved:
+            raise ValueError("no-intervention requires preapproved=true")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "delegated_by_parent": self.delegated_by_parent,
+            "preapproved": self.preapproved,
+            "interaction_mode": self.interaction_mode.value,
+        }
+
+
+@dataclass(frozen=True)
+class RunRequest:
+    task: str
+    workspace: str
+    metadata: RunMetadata = field(default_factory=RunMetadata)
+
+
+@dataclass(frozen=True)
+class SubtaskSpec:
+    subtask_id: str
+    objective: str
+    dependencies: tuple[str, ...]
+    route: "Route"
+    affected_scope: tuple[str, ...] = ()
+    can_parallelize: bool = False
+    parallel_group: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "subtask_id": self.subtask_id,
+            "objective": self.objective,
+            "dependencies": list(self.dependencies),
+            "route": self.route.to_dict(),
+            "affected_scope": list(self.affected_scope),
+            "can_parallelize": self.can_parallelize,
+            "parallel_group": self.parallel_group,
+        }
+
+
 @dataclass(frozen=True)
 class Route:
     phase: Phase

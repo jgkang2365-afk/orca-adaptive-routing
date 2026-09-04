@@ -1,0 +1,6 @@
+interface:
+  display_name: "Orca Adaptive Routing"
+  short_description: "Delegate project work through the Adaptive Coordinator"
+  default_prompt: "Use $orca-adaptive-routing to route and execute this project task safely."
+policy:
+  allow_implicit_invocation: true
