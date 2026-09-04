@@ -2,115 +2,87 @@
 
 ## Task
 
-Adaptive Coordinator v0.2.1 — Orca/Codex runtime compatibility recovery and Pilot resumption
+Adaptive Coordinator v0.3.0-1 — Default Orca Entry, No-Intervention Runs, and Parallel Fan-out
 
 ## Status
 
-PASS
+PARTIAL — implementation and static verification are complete, but Production acceptance is NOT COMPLETE. Work was stopped at a safe boundary for the day.
 
-## Runtime Baseline
+## Baseline
 
-- Orca: `1.4.192`
-- Codex: `0.150.1` (unchanged)
-- Adaptive Coordinator: `0.2.1`
-- Base GitHub main: `d2d1a661be7c22f2415b30807712510e73ed7a36`
-- Initial Production snapshot: `0.2.0 / 5d15cf58b3d9b9107a0a3a57996916ba70394b8f`
-- Initial Candidate snapshot: `0.2.1 / 0a0b60e1851fc41c09a7add4dcd9cb276d865bc1`
+- Base `main` / GitHub / Production commit: `d4dfb5473f53efbd7c49d6997370b09645bcffd9`
+- Working branch: `fix/v0.3-parent-coordinator-integration`
+- Implementation commit: `c25dbb6be33c5c92a19381ed9f9735bc090e3d10`
+- Package version on the branch: `0.3.0`
+- Baseline tests: 229/229 PASS
 
-## Root Cause
+## Completed
 
-- Orca's renderer-backed local terminal path did not publish an authoritative Codex identity when its launch-authority token contract was absent. The TUI could be idle while `agentIdentity` remained unset, so supervised `worker-start` correctly failed closed.
-- A local CLI retry cannot safely reconcile a timed-out create because each RPC receives a different runtime client identity. Retrying locally created multiple terminals and was removed.
-- The safe compatibility path is restricted to local interactive Codex commands owned by the exact `orca-adaptive:<phase>` title namespace. It uses Orca's direct PTY path and official `launchAgent: codex` metadata. Local create timeouts never retry; only paired remote clients may use bounded reconciliation with one mutation id.
-- During trusted relay cleanup, Orca may close the exact worker tab as part of fencing. A subsequent close now treats only the exact structured `runtime_error: tab_not_found` result as idempotent already-absent; all other close/ownership errors remain fail-closed.
-- No Codex downgrade or update was required.
+- Added typed Parent delegation and preapproval metadata.
+- Added bounded task decomposition, up to three READ_ONLY fan-out workers, dependency join, bounded evidence handoff, one-Lead WRITE fencing, verifier separation, and Coordinator-owned telemetry.
+- Added fail-closed handling for sibling launch, settlement, question, cleanup, escalation, risk-floor, and shared xhigh-budget paths.
+- Added exact-snapshot installation of the common Adaptive Routing Skill into shared, Codex, and Orca-managed WSL Skill roots.
+- Expanded the Skill so mutation, multi-file investigation, implementation, testing, and refactoring requests enter Adaptive Coordinator while simple explanatory conversation may remain with Parent.
+- Candidate snapshot installed at commit `c25dbb6be33c5c92a19381ed9f9735bc090e3d10`; production launcher was not promoted.
 
-## Changes
+## Verification
 
-| Area | Change | Reason |
-|---|---|---|
-| `adaptive_coordinator/orca.py` | Adaptive terminal namespace and exact already-absent close handling | Bind the compatibility path to Coordinator-owned terminals and keep cleanup idempotent without guessing |
-| `scripts/orca_runtime_compat.py` | Exact-hash, reversible Orca 1.4.192 CLI handler patch | Restore authoritative identity while rejecting unknown source, backup, marker-preserving mutations, and unsafe local retries |
-| `adaptive_coordinator/runner.py` | Explicit Implementation result skeleton | Preserve strict success evidence while preventing omission of required fields |
-| `tests/` | Runtime, identity, reconciliation, mutation, settlement, and contract regressions | Lock the live failure modes and fail-closed boundaries |
-| `docs/orca-runtime-compatibility.md` | Installation and rollback contract | Document the narrow runtime patch and operator safety rules |
-
-## Runtime Verification
-
-- Live V3 probe terminal: `term_c578e885421e662af0f21fb679fef4f3`
-- Run / Task / Dispatch: `run_35949f1756d4` / `task_a41d4dcca872` / `ctx_9a3b7fa47b92`
-- Exact update prompt option `2` was selected; automatic Codex update was not used.
-- The same terminal reached TUI idle, published `agentIdentity=codex`, started the worker, delivered `worker_done`, settled, closed, and released.
-- Exact failed-candidate terminals created during diagnosis were closed by handle. No list-order, newest-terminal, title-only, or worktree-only attachment was used.
-- Installed Orca handler SHA-256: `38ad8a5fd41a3c45e3927a6ccf741aa22cf161c9671fa26cb6229cfc963adedd`.
-- Trusted original SHA-256: `b6b08954c7c2c7dc1e36a90eeb8da390b31cf0e00c5229327d006aff57bb96b4`.
-
-## Tests
-
-- Unit/contract: 229/229 PASS.
+- Unit/contract tests: 267/267 PASS.
 - `compileall`: PASS.
 - installer shell syntax: PASS.
 - `git diff --check`: PASS.
 - v0.2 benchmark zero-invariants: PASS.
-- GitHub `quality-gate`: PASS for PR #28 and PR #29.
-- Independent `gpt-5.6-sol / high / READ_ONLY` verification: PASS for the runtime patch, settlement follow-up, and live Candidate resources.
+- Skill validation: PASS.
+- Independent `gpt-5.6-sol / high / READ_ONLY` review: PASS for the implementation and adversarial state-machine cases; no P0/P1 finding remained.
 
-## Candidate Pilot
+## Actual Orca Parent E2E
 
-### READ_ONLY 3/3
+- A visible Orca Parent Codex terminal was created through the official terminal API and reached `tui-idle`.
+- The normal user-style mutation prompt automatically selected the installed `orca-adaptive-routing` Skill. Parent did not call `apply_patch` or directly mutate the repository.
+- The first delegated CLI attempt used the existing Production `0.2.1` launcher because Codex prepended `~/.local/bin` ahead of the candidate PATH. That launcher rejected the new v0.3 metadata flags. Parent then retried using its supported form.
+- The Coordinator invocation failed before worker creation with `UtilBindVsockAnyPort:309: socket failed 1`.
+- A separate READ_ONLY probe confirmed that the Windows Orca CLI cannot be invoked from the sandboxed Parent either; it fails with the same WSL vsock error.
+- The repository remained clean and the temporary E2E file was never created.
+- The E2E Parent terminal created by this task was closed successfully. No E2E worker was created.
 
-| Run | Task | Dispatch | Route | Result |
-|---|---|---|---|---|
-| `run_3047936dd45a` | `task_22e210dff029` | `ctx_68631c9f9fb0` | Luna/low/READ_ONLY | SUCCESS, 1 worker, 1 attempt, released |
-| `run_d3eb68f2d46b` | `task_10f685afd673` | `ctx_21c562c9f2aa` | Luna/low/READ_ONLY | SUCCESS, 1 worker, 1 attempt, released |
-| `run_8adbc9145367` | `task_e57eb42ad1ce` | `ctx_9bfcdb8111cb` | Luna/low/READ_ONLY | SUCCESS, 1 worker, 1 attempt, released |
+## Root Cause / Integration Boundary
 
-### workspace-write 3/3
+The Skill-based Parent delegation decision works, but the tested READ_ONLY WSL Parent cannot invoke the current `orca-ide` bridge. The bridge launches Windows PowerShell/Orca through WSL interop, and that interop requires a vsock operation denied inside the Codex sandbox. No workspace-write or sandbox-weakening workaround was attempted.
 
-| Run | Task | Dispatch | Route | Result |
-|---|---|---|---|---|
-| `run_63e71e3c5bd0` | `task_172f6764be94` | `ctx_e057d3d14a7e` | Terra/medium/workspace-write | SUCCESS, one requested file, released |
-| `run_9dd135c490eb` | `task_571cf7fbbd03` | `ctx_9041608cc2c2` | Terra/medium/workspace-write | SUCCESS, one requested file, released |
-| `run_c9313fe6eb74` | `task_b67510f3282b` | `ctx_83ef0739dd87` | Terra/medium/workspace-write | SUCCESS, one requested file, released |
+The current Orca hook endpoint accepts lifecycle/telemetry events; no verified official contract was found that turns a Parent prompt into an out-of-sandbox Coordinator Run. Removing the sandbox, requesting an Allow escalation, attaching an unknown terminal, or letting Parent mutate directly would violate the acceptance criteria and was not attempted.
 
-The three disposable Pilot files were verified and removed. The dedicated Pilot worktree was clean and then removed. No retry, capability escalation, duplicate WRITE, outside-workspace write, or residual Pilot resource occurred.
+## Acceptance State
 
-The six successful Pilot Tasks used the documented Coordinator trusted relay because the sandboxed worker's direct WSL lifecycle delivery was unavailable. Orca's post-close worker metadata records operator-close, while each Task contains verified completion evidence and every terminal resource is released with zero residual resources. This is not reported as normal direct `worker_done` success.
+- General Parent selects the Adaptive Skill: PROVEN.
+- Parent direct mutation count in E2E A: 0.
+- Approval prompt count in E2E A: 0.
+- Fail-closed behavior and clean workspace: PROVEN.
+- Coordinator worker launch from sandboxed Parent: BLOCKED by WSL vsock boundary.
+- Actual parallel overlap, E2E A completion, E2E B/C/D, PR, merge, Production installation, Production smoke, and rollback: NOT RUN because the first mandatory E2E Gate failed.
 
-## Production
+## Git / Deployment
 
-- Runtime code merge: `48a904e8e8ac03a8f37bda9660639de66b7b5e2e` (PR #29; includes PR #28 runtime patch).
-- Production version: `0.2.1`.
-- Production Closure Pilot: `run_e3e4de591ede` / `task_3f759d1e47af` / `ctx_36c4d3e20083` — Luna/low/READ_ONLY, 1 worker, 1 attempt, SUCCESS, released.
-- Exact Supabase title dry-run: Complex; Terra/high READ_ONLY Investigation, Terra/high workspace-write Implementation, conditional verifier; no initial Sol/high or xhigh.
-- Final GitHub/local/installed equality is verified after publishing the commit containing this handoff.
-
-## Rollback
-
-- Adaptive launcher switched to the preserved `0.2.0 / 5d15cf58...` snapshot and reported the expected version/commit, then restored to `0.2.1`.
-- Orca handler rolled back to trusted original SHA `b6b08954...`, reported `state=original`, then reinstalled V3 SHA `38ad8a5f...`, reported `state=patched`, retained the trusted backup, and passed Node syntax validation.
-- No snapshot or previous binary was deleted.
+- Development remains on `fix/v0.3-parent-coordinator-integration`; `main` was not modified.
+- No PR, merge, GitHub main push, or Production promotion was performed.
+- Existing Production `0.2.1` remains unchanged.
+- Candidate `0.3.0` snapshot is preserved for continuation.
 
 ## Safety
 
-- No identity bypass, terminal guessing, sandbox weakening, `danger-full-access`, Codex auto-update, model escalation for runtime failure, force push, rebase, reset, history rewrite, or unrelated-project mutation occurred.
-- READ_ONLY and workspace-write remained independent of model capability.
-- Existing unrelated terminals, workers, repositories, and worktrees were preserved.
+- No sandbox weakening, `danger-full-access`, unknown-terminal attachment, force push, rebase, history rewrite, unrelated-project mutation, or direct Parent WRITE occurred.
+- Existing unrelated Orca terminals, workers, Runs, repositories, and worktrees were not changed.
+- Only the E2E Parent terminal created by this task was closed.
 
 ## Remaining Issues
 
-No deployment blockers remain.
-
-Known operational limitations:
-
-1. GitHub `main` branch protection is not available for this private repository under the current account plan. `Adaptive Coordinator Quality / quality-gate` CI is active and has passed, but GitHub does not technically enforce that check as a merge requirement.
-2. Sandboxed WSL workers may require the verified Coordinator trusted-relay fallback when direct WSL lifecycle delivery is unavailable. This fallback still requires phase-specific success evidence, exact workspace-diff validation, worker fencing, Task settlement, terminal release, and zero residual resources; it does not bypass the Success Evidence Gate.
-3. Orca may record trusted-relay Dispatches as `operator-close` after the Coordinator has already accepted authoritative Task evidence and released the worker. Consumers must interpret Task/Runner success together with released-resource state rather than treating the post-close Dispatch status alone as task failure.
+1. Establish an official trusted Parent-to-Coordinator relay that executes outside the sandbox while preserving structured preapproval and exact workspace identity.
+2. Ensure candidate E2E resolves the candidate executable explicitly instead of the older Production launcher.
+3. After the relay works, restart at E2E A and then run B/C/D, independent runtime verification, PR/CI/merge, exact Production installation, Production E2E smoke, and rollback.
 
 ## Decision Required
 
-None.
+None for today's close. Do not weaken the sandbox as a workaround. If Orca exposes no supported trusted delegation primitive, the task remains BLOCKED pending an Orca runtime capability rather than a repository-only fix.
 
 ## Next Start Point
 
-Use the Production `orca-adaptive run` entry point for the next real project task. Keep Orca at the verified 1.4.192 build unless the compatibility patch is reviewed against a new exact handler hash; after an Orca upgrade, do not reapply this patch by guesswork.
+Resume from the sandbox-to-Orca transport boundary. First determine whether Orca 1.4.197 exposes a supported out-of-sandbox prompt/delegation relay or host-side coordinator callback. If it does, integrate that exact contract and rerun E2E A from the beginning. If it does not, record the product-runtime blocker and do not proceed to Production promotion.
