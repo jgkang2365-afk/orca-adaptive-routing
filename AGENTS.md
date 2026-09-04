@@ -93,6 +93,12 @@ For the same worktree:
 Create separate worktrees only when there is a concrete isolation or
 filesystem-conflict reason, or when explicitly required.
 
+Independent verification should not be serialized merely because the Coordinator
+can perform it itself. After a coherent WRITE patch exists, dispatch independent
+READ_ONLY checks concurrently where practical. During implementation, prefer
+focused checks; run the required full regression/type/lint/build gate on the
+stable candidate rather than after every small edit.
+
 ## Permissions
 
 READ-ONLY workers must be technically constrained where possible,
@@ -111,6 +117,16 @@ for implementation.
 
 The default implementation role uses workspace-write rather than
 unrestricted filesystem access whenever practical.
+
+For ordinary local development, prefer the Codex permission mode equivalent to
+`Approve for me` when available. Do not automatically select `Full Access`,
+`danger-full-access`, administrator elevation, or equivalent unrestricted
+authority. An explicit user-approved work order authorizes routine
+non-production operations already contained in that scope; the Coordinator must
+not turn those operations into repeated command-by-command user approval
+questions. Routine safe escalation metadata is handled internally where the
+runtime permits. Production, destructive, credential, unrestricted-authority,
+and other materially high-risk operations remain separately user-gated.
 
 ## Worker Lifecycle
 
@@ -198,3 +214,13 @@ Codex worker permission enforcement follows:
 `docs/wsl-worker-runtime.md`
 
 This runtime policy is mandatory for adaptive-routed Codex workers.
+
+## Global Execution Policy
+
+All Orca development work also follows:
+
+`docs/orca-global-execution.md`
+
+This policy is mandatory for Coordinator throughput, parallel verification,
+test cadence, approval handling, and user-screen non-interference. It does not
+weaken stricter sandbox or safety rules.
