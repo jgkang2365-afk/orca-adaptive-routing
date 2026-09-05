@@ -1,7 +1,20 @@
 # Orca Adaptive Routing
 
-Adaptive Coordinator v0.2.1 turns a task brief into a closed-loop routing plan
-and executes its logical Gates through Orca-supervised Codex workers.
+> **Status: RETIREMENT IN PROGRESS — NOT AN APPROVED PRODUCTION PATH**
+>
+> Further Adaptive Coordinator development has stopped. The repository is kept
+> as historical/reference material. Retirement is currently fail-closed because
+> Orca has upgraded to 1.4.197 and its runtime handler no longer matches either
+> exact 1.4.192 hash accepted by the rollback tool. The installed launcher has
+> therefore not been removed out of sequence; operators must not start new
+> `orca-adaptive` Runs.
+
+## Historical reference
+
+Adaptive Coordinator v0.2.1 turned a task brief into a closed-loop routing plan
+and executed its logical Gates through Orca-supervised Codex workers. The
+following commands describe the retired experiment and are not current
+Production instructions.
 
 ```bash
 python3 -m adaptive_coordinator route "Inspect the repository and list Markdown files."

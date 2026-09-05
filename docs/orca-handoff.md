@@ -2,115 +2,102 @@
 
 ## Task
 
-Adaptive Coordinator v0.2.1 — Orca/Codex runtime compatibility recovery and Pilot resumption
+Adaptive Coordinator serial retirement — first pass
 
 ## Status
 
-PASS
+PARTIAL RETIREMENT
 
-## Runtime Baseline
+The repository is no longer approved as a Production execution path. The exact
+runtime rollback Gate could not be satisfied, so launcher removal was not
+performed out of sequence.
 
-- Orca: `1.4.192`
-- Codex: `0.150.1` (unchanged)
-- Adaptive Coordinator: `0.2.1`
-- Base GitHub main: `d2d1a661be7c22f2415b30807712510e73ed7a36`
-- Initial Production snapshot: `0.2.0 / 5d15cf58b3d9b9107a0a3a57996916ba70394b8f`
-- Initial Candidate snapshot: `0.2.1 / 0a0b60e1851fc41c09a7add4dcd9cb276d865bc1`
+## Retirement Date
 
-## Root Cause
+2026-09-05 (Asia/Seoul)
 
-- Orca's renderer-backed local terminal path did not publish an authoritative Codex identity when its launch-authority token contract was absent. The TUI could be idle while `agentIdentity` remained unset, so supervised `worker-start` correctly failed closed.
-- A local CLI retry cannot safely reconcile a timed-out create because each RPC receives a different runtime client identity. Retrying locally created multiple terminals and was removed.
-- The safe compatibility path is restricted to local interactive Codex commands owned by the exact `orca-adaptive:<phase>` title namespace. It uses Orca's direct PTY path and official `launchAgent: codex` metadata. Local create timeouts never retry; only paired remote clients may use bounded reconciliation with one mutation id.
-- During trusted relay cleanup, Orca may close the exact worker tab as part of fencing. A subsequent close now treats only the exact structured `runtime_error: tab_not_found` result as idempotent already-absent; all other close/ownership errors remain fail-closed.
-- No Codex downgrade or update was required.
+## Source State
 
-## Changes
+- Branch: `chore/retire-adaptive-coordinator`
+- Baseline source/GitHub main: `749bbf6bba2059d2cb59fe20ca979d25aec70065`
+- Preserved unmerged v0.3 branch: `fix/v0.3-parent-coordinator-integration`
+- Single Adaptive repository worktree: `/home/user/projects/orca-adaptive-routing`
 
-| Area | Change | Reason |
-|---|---|---|
-| `adaptive_coordinator/orca.py` | Adaptive terminal namespace and exact already-absent close handling | Bind the compatibility path to Coordinator-owned terminals and keep cleanup idempotent without guessing |
-| `scripts/orca_runtime_compat.py` | Exact-hash, reversible Orca 1.4.192 CLI handler patch | Restore authoritative identity while rejecting unknown source, backup, marker-preserving mutations, and unsafe local retries |
-| `adaptive_coordinator/runner.py` | Explicit Implementation result skeleton | Preserve strict success evidence while preventing omission of required fields |
-| `tests/` | Runtime, identity, reconciliation, mutation, settlement, and contract regressions | Lock the live failure modes and fail-closed boundaries |
-| `docs/orca-runtime-compatibility.md` | Installation and rollback contract | Document the narrow runtime patch and operator safety rules |
+## Resource Cleanup
 
-## Runtime Verification
+- The disposable `/tmp/measurement-agents-retirement` worktree created under the superseded first instruction was verified clean, equal to its `origin/main`, free of unique commits and running processes, then removed.
+- Its temporary `docs/agents-work-order-orchestration` branch was deleted after confirming it pointed to `origin/main`.
+- Dedicated live `orca-adaptive:*` terminals: `0`.
+- Running `orca-adaptive` / `adaptive_coordinator` processes: `0`.
+- Live Adaptive worker terminals: `0`.
+- Two historical external-ownership worker resource records remain in Orca metadata. Both exact terminal handles return `terminal_handle_stale`; they are not live processes and were not mutated because they are externally owned.
+- The single visible `orca-adaptive-routing` terminal is the user-approved Coordinator workspace for this retirement task, not an Adaptive worker.
 
-- Live V3 probe terminal: `term_c578e885421e662af0f21fb679fef4f3`
-- Run / Task / Dispatch: `run_35949f1756d4` / `task_a41d4dcca872` / `ctx_9a3b7fa47b92`
-- Exact update prompt option `2` was selected; automatic Codex update was not used.
-- The same terminal reached TUI idle, published `agentIdentity=codex`, started the worker, delivered `worker_done`, settled, closed, and released.
-- Exact failed-candidate terminals created during diagnosis were closed by handle. No list-order, newest-terminal, title-only, or worktree-only attachment was used.
-- Installed Orca handler SHA-256: `38ad8a5fd41a3c45e3927a6ccf741aa22cf161c9671fa26cb6229cfc963adedd`.
-- Trusted original SHA-256: `b6b08954c7c2c7dc1e36a90eeb8da390b31cf0e00c5229327d006aff57bb96b4`.
+## Runtime
 
-## Tests
+- Current Orca version: `1.4.197`.
+- Exact handler: `/mnt/c/Users/USER/AppData/Local/Programs/orca/resources/app.asar.unpacked/out/cli/handlers/terminal.js`.
+- Current/before SHA-256: `980c4a931ffb0d99a65b8ac30875a6472acd8cd678544c92d5109723ae5e7d7f`.
+- Known v0.2.1 patched SHA-256: `38ad8a5fd41a3c45e3927a6ccf741aa22cf161c9671fa26cb6229cfc963adedd`.
+- Trusted Orca 1.4.192 original SHA-256: `b6b08954c7c2c7dc1e36a90eeb8da390b31cf0e00c5229327d006aff57bb96b4`.
+- `orca_runtime_compat.py status`: `state=unknown`, `trustedBackup=false`.
+- The current handler contains no Adaptive patch marker or `orca-adaptive:` compatibility branch.
+- Rollback: **NOT EXECUTED / FAIL-CLOSED**. Orca is not the verified 1.4.192 build, the current SHA is unknown to the rollback tool, and no trusted backup exists beside the 1.4.197 handler. Restoring the 1.4.192 JavaScript into 1.4.197 would be an unsafe cross-version overwrite forbidden by policy.
+- After SHA: unchanged at `980c4a931ffb0d99a65b8ac30875a6472acd8cd678544c92d5109723ae5e7d7f`.
 
-- Unit/contract: 229/229 PASS.
-- `compileall`: PASS.
-- installer shell syntax: PASS.
-- `git diff --check`: PASS.
-- v0.2 benchmark zero-invariants: PASS.
-- GitHub `quality-gate`: PASS for PR #28 and PR #29.
-- Independent `gpt-5.6-sol / high / READ_ONLY` verification: PASS for the runtime patch, settlement follow-up, and live Candidate resources.
+## Production Installation
 
-## Candidate Pilot
+- Last Production version: `0.2.1`.
+- Last installed commit: `d4dfb5473f53efbd7c49d6997370b09645bcffd9`.
+- Launcher: `/home/user/.local/bin/orca-adaptive`.
+- Launcher target: `/home/user/.local/lib/orca-adaptive-routing/d4dfb5473f53efbd7c49d6997370b09645bcffd9/orca-adaptive`.
+- Launcher removal: **NO**. The instruction requires exact runtime rollback and smoke PASS before removal; the rollback Gate failed.
+- Snapshots preserved: **YES** at `/home/user/.local/lib/orca-adaptive-routing/`.
+- No snapshot or session history was deleted.
 
-### READ_ONLY 3/3
+## General Environment
 
-| Run | Task | Dispatch | Route | Result |
-|---|---|---|---|---|
-| `run_3047936dd45a` | `task_22e210dff029` | `ctx_68631c9f9fb0` | Luna/low/READ_ONLY | SUCCESS, 1 worker, 1 attempt, released |
-| `run_d3eb68f2d46b` | `task_10f685afd673` | `ctx_21c562c9f2aa` | Luna/low/READ_ONLY | SUCCESS, 1 worker, 1 attempt, released |
-| `run_8adbc9145367` | `task_e57eb42ad1ce` | `ctx_9bfcdb8111cb` | Luna/low/READ_ONLY | SUCCESS, 1 worker, 1 attempt, released |
+- WSL Codex resolution: `/home/user/.nvm/versions/node/v24.20.0/bin/codex` (Linux path precedes the Windows fallback).
+- Codex version: `codex-cli 0.150.1`.
+- Codex smoke: PASS (`codex --version`; the read-only environment emitted only the expected inability to create PATH aliases).
+- Orca version query: PASS (`1.4.197`).
+- General Orca shell terminal smoke: PASS. A non-Adaptive terminal printed `ORCA_RETIREMENT_SMOKE_OK` and was closed by exact handle.
 
-### workspace-write 3/3
+## Repository State
 
-| Run | Task | Dispatch | Route | Result |
-|---|---|---|---|---|
-| `run_63e71e3c5bd0` | `task_172f6764be94` | `ctx_e057d3d14a7e` | Terra/medium/workspace-write | SUCCESS, one requested file, released |
-| `run_9dd135c490eb` | `task_571cf7fbbd03` | `ctx_9041608cc2c2` | Terra/medium/workspace-write | SUCCESS, one requested file, released |
-| `run_c9313fe6eb74` | `task_b67510f3282b` | `ctx_83ef0739dd87` | Terra/medium/workspace-write | SUCCESS, one requested file, released |
+- Current status: retirement requested; not approved for Production use.
+- README prominently marks the project `RETIREMENT IN PROGRESS — NOT AN APPROVED PRODUCTION PATH`.
+- Historical implementation and validation records remain available for reference.
+- Any old `PASS` result describes historical component validation only and does not mean the Coordinator remains an active Production path.
+- GitHub repository is retained; it is not deleted.
 
-The three disposable Pilot files were verified and removed. The dedicated Pilot worktree was clean and then removed. No retry, capability escalation, duplicate WRITE, outside-workspace write, or residual Pilot resource occurred.
+## Scope Protection
 
-The six successful Pilot Tasks used the documented Coordinator trusted relay because the sandboxed worker's direct WSL lifecycle delivery was unavailable. Orca's post-close worker metadata records operator-close, while each Task contains verified completion evidence and every terminal resource is released with zero residual resources. This is not reported as normal direct `worker_done` success.
+- No new worker, sub-agent, fan-out, scheduler, runtime patch, or Adaptive feature was created.
+- No runtime file was changed.
+- No unrelated Orca/Codex configuration, session database, project worker, or terminal was changed.
+- The dirty Windows `측정일지_html` main and its existing worktrees were not modified. Policy migration was excluded by the superseding second instruction.
 
-## Production
+## Remaining Blocker
 
-- Runtime code merge: `48a904e8e8ac03a8f37bda9660639de66b7b5e2e` (PR #29; includes PR #28 runtime patch).
-- Production version: `0.2.1`.
-- Production Closure Pilot: `run_e3e4de591ede` / `task_3f759d1e47af` / `ctx_36c4d3e20083` — Luna/low/READ_ONLY, 1 worker, 1 attempt, SUCCESS, released.
-- Exact Supabase title dry-run: Complex; Terra/high READ_ONLY Investigation, Terra/high workspace-write Implementation, conditional verifier; no initial Sol/high or xhigh.
-- Final GitHub/local/installed equality is verified after publishing the commit containing this handoff.
-
-## Rollback
-
-- Adaptive launcher switched to the preserved `0.2.0 / 5d15cf58...` snapshot and reported the expected version/commit, then restored to `0.2.1`.
-- Orca handler rolled back to trusted original SHA `b6b08954...`, reported `state=original`, then reinstalled V3 SHA `38ad8a5f...`, reported `state=patched`, retained the trusted backup, and passed Node syntax validation.
-- No snapshot or previous binary was deleted.
-
-## Safety
-
-- No identity bypass, terminal guessing, sandbox weakening, `danger-full-access`, Codex auto-update, model escalation for runtime failure, force push, rebase, reset, history rewrite, or unrelated-project mutation occurred.
-- READ_ONLY and workspace-write remained independent of model capability.
-- Existing unrelated terminals, workers, repositories, and worktrees were preserved.
-
-## Remaining Issues
-
-No deployment blockers remain.
-
-Known operational limitations:
-
-1. GitHub `main` branch protection is not available for this private repository under the current account plan. `Adaptive Coordinator Quality / quality-gate` CI is active and has passed, but GitHub does not technically enforce that check as a merge requirement.
-2. Sandboxed WSL workers may require the verified Coordinator trusted-relay fallback when direct WSL lifecycle delivery is unavailable. This fallback still requires phase-specific success evidence, exact workspace-diff validation, worker fencing, Task settlement, terminal release, and zero residual resources; it does not bypass the Success Evidence Gate.
-3. Orca may record trusted-relay Dispatches as `operator-close` after the Coordinator has already accepted authoritative Task evidence and released the worker. Consumers must interpret Task/Runner success together with released-resource state rather than treating the post-close Dispatch status alone as task failure.
+The retirement specification requires the runtime handler to equal the Orca
+1.4.192 trusted-original SHA before launcher removal. The installed Orca is
+1.4.197 with a different, unrecognized handler and no trusted 1.4.192 backup.
+The rollback tool correctly refuses this state. A version-aware, vendor-sourced
+integrity decision for Orca 1.4.197 is required before the ordered launcher and
+Adaptive-only Skill removal steps can be completed.
 
 ## Decision Required
 
-None.
+None was requested during this run. The operation stopped fail-closed at the
+explicit runtime hash Gate. Do not copy the 1.4.192 handler into Orca 1.4.197.
 
 ## Next Start Point
 
-Use the Production `orca-adaptive run` entry point for the next real project task. Keep Orca at the verified 1.4.192 build unless the compatibility patch is reviewed against a new exact handler hash; after an Orca upgrade, do not reapply this patch by guesswork.
+Obtain an authoritative Orca 1.4.197 handler hash or supported repair/reinstall
+procedure from the exact installed release. Once the current handler is proven
+vendor-original, record that the old patch was superseded by upgrade, rerun the
+general Orca smoke, then remove only the `orca-adaptive` launcher and clearly
+Adaptive-only Skill links while preserving all snapshots. Finish with an
+independent READ_ONLY retirement review. The measurement-project `AGENTS.md`
+policy migration remains a separate later task.
