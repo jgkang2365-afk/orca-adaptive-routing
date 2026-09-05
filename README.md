@@ -1,13 +1,12 @@
 # Orca Adaptive Routing
 
-> **Status: RETIREMENT IN PROGRESS — NOT AN APPROVED PRODUCTION PATH**
+> **Status: RETIRED — NOT A PRODUCTION EXECUTION PATH**
 >
 > Further Adaptive Coordinator development has stopped. The repository is kept
-> as historical/reference material. Retirement is currently fail-closed because
-> Orca has upgraded to 1.4.197 and its runtime handler no longer matches either
-> exact 1.4.192 hash accepted by the rollback tool. The installed launcher has
-> therefore not been removed out of sequence; operators must not start new
-> `orca-adaptive` Runs.
+> as historical/reference material. Orca 1.4.197 contains neither Adaptive
+> runtime compatibility marker, so the earlier Orca 1.4.192 patch was superseded
+> by the upgrade without copying cross-version runtime code. The Production
+> `orca-adaptive` launcher has been withdrawn; do not start new Adaptive Runs.
 
 ## Historical reference
 
