@@ -74,21 +74,24 @@ material.
   candidate payload, and Production snapshots.
 - Post-cleanup Codex and general Orca terminal smoke checks: PASS.
 
-## Measurement Project Policy Migration
+## Execution-Policy Migration
 
-- Windows workspace: `C:/Users/USER/Desktop/안티그래비티/측정일지_html`.
-- Existing dirty files, index, local `main`, and active work were not reset,
-  stashed, switched, deleted, or cleaned.
-- The local `AGENTS.md` had no semantic user change beyond line endings. It was
-  updated to the current `origin/main` policy and received one new work-order
-  orchestration section.
-- Existing preliminary-survey canonical, Windows synchronization, DB/Git safety,
-  UI non-interference, test-reporting, and cleanup rules remain intact.
-- Policy commit based directly on measurement `origin/main`:
-  `89d5232ceb984038d7a691f997319b2b7d1b1641`.
-- GitHub PR: `jgkang2365-afk/----_Html#100`.
-- The PR remains unmerged because merging a default branch requires separate
-  explicit authorization under the preserved project and global Git policy.
+- The active Orca/WSL Codex global instruction location is
+  `/home/user/.codex/AGENTS.md`.
+- A minimal global execution/safety/cleanup policy was created there and verified
+  from a fresh Codex session as active session instructions.
+- `approval_policy = "never"` was added to `/home/user/.codex/config.toml` and a
+  fresh Codex read-only session verified `approval: never` with
+  `sandbox: read-only`.
+- The measurement-project `AGENTS.md` was audited against current `origin/main`.
+  Its only extra semantic content was the proposed generic work-order
+  orchestration section; that section was removed from the Windows workspace and
+  the file was verified identical to `origin/main`.
+- Measurement PR `jgkang2365-afk/----_Html#100` was closed without merge because
+  generic orchestration belongs in the global Codex layer and per-task work
+  orders, not in the measurement-project policy file.
+- Existing preliminary-survey canonical/synchronization, DB/Git safety, project
+  test/reporting, and UI rules remain in the measurement-project `AGENTS.md`.
 
 ## Repository
 
@@ -98,6 +101,8 @@ material.
 - Initial retirement PR: `#33`, merged as
   `d3d241cc753d024ae9f8fd2bb6965925265d7258`; `quality-gate` PASS.
 - GitHub repository is retained as `RETIRED/FROZEN` reference material.
+- Root `AGENTS.md` now marks Adaptive routing/model/escalation/runtime policy as
+  historical/reference only and forbids routine reactivation or redeployment.
 - Historical PASS results describe component validation only, not an active
   Production deployment.
 
@@ -106,21 +111,19 @@ material.
 - `danger-full-access`: not used.
 - Sandbox weakening: none.
 - Cross-version runtime overwrite: none.
-- Other project files or worktrees: not modified by final closure.
+- Existing user work in the measurement project was not reset, stashed, switched,
+  deleted, or cleaned.
 - Production snapshots: preserved.
 
 ## Remaining Issues
 
-None for Adaptive Coordinator Production retirement. Adaptive-only Skill-link
-removal was not part of the resumed bounded instruction and should be handled
-separately only after verifying each link is not shared by another Orca/Codex
-workflow.
+None for Adaptive Coordinator Production retirement.
 
 ## Decision Required
 
-None.
+Review and merge this retirement-cleanup PR when approved.
 
 ## Next Start Point
 
-If desired, perform the separately scoped measurement-project `AGENTS.md` policy
-migration without restoring or invoking the retired Adaptive Coordinator.
+After this PR is merged, continue only with non-Adaptive global/local instruction
+cleanup (for example the separate Windows Codex global copy) as a distinct task.
