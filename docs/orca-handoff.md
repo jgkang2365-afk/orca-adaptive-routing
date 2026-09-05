@@ -60,6 +60,36 @@ material.
 - Historical Orca worker records and user-owned general shell/Codex terminals
   were not altered; they are not live Adaptive execution resources.
 
+## Residual Configuration Cleanup
+
+- Removed the Adaptive-only shared Skill directory:
+  `/home/user/.agents/skills/orca-adaptive-routing`.
+- Removed the Adaptive-only Codex Skill link:
+  `/home/user/.codex/skills/orca-adaptive-routing`.
+- Removed the Adaptive-only Orca managed-runtime Skill link:
+  `/home/user/.local/share/orca/codex-runtime-home/home/skills/orca-adaptive-routing`.
+- Preserved `ORCA_CODEX_LAUNCH_PREFLIGHT` because it points to the general Orca
+  executable and is not Adaptive-only.
+- Preserved generic Codex project trust entries, session/shell history, the
+  candidate payload, and Production snapshots.
+- Post-cleanup Codex and general Orca terminal smoke checks: PASS.
+
+## Measurement Project Policy Migration
+
+- Windows workspace: `C:/Users/USER/Desktop/안티그래비티/측정일지_html`.
+- Existing dirty files, index, local `main`, and active work were not reset,
+  stashed, switched, deleted, or cleaned.
+- The local `AGENTS.md` had no semantic user change beyond line endings. It was
+  updated to the current `origin/main` policy and received one new work-order
+  orchestration section.
+- Existing preliminary-survey canonical, Windows synchronization, DB/Git safety,
+  UI non-interference, test-reporting, and cleanup rules remain intact.
+- Policy commit based directly on measurement `origin/main`:
+  `89d5232ceb984038d7a691f997319b2b7d1b1641`.
+- GitHub PR: `jgkang2365-afk/----_Html#100`.
+- The PR remains unmerged because merging a default branch requires separate
+  explicit authorization under the preserved project and global Git policy.
+
 ## Repository
 
 - Working branch: `chore/retire-adaptive-coordinator`.
