@@ -1,12 +1,17 @@
 # Orca Adaptive Routing
 
-> **Status: RETIRED — NOT A PRODUCTION EXECUTION PATH**
+> **Status: RETIRED — ARCHIVE ONLY — NOT A PRODUCTION EXECUTION PATH**
 >
 > Further Adaptive Coordinator development has stopped. The repository is kept
 > as historical/reference material. Orca 1.4.197 contains neither Adaptive
 > runtime compatibility marker, so the earlier Orca 1.4.192 patch was superseded
 > by the upgrade without copying cross-version runtime code. The Production
 > `orca-adaptive` launcher has been withdrawn; do not start new Adaptive Runs.
+>
+> Current Orca/Codex execution policy must come from the active global Codex
+> `AGENTS.md` and its verified policy snapshot in `jgkang2365-afk/orca-codex`.
+> This repository must not be used as a fallback runtime or fallback policy when
+> the current Orca path is blocked.
 
 ## Historical reference
 
@@ -51,3 +56,10 @@ Run the deterministic routing and lifecycle contract tests with:
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
+
+## Reactivation boundary
+
+Do not reactivate this code through maintenance or incident recovery. Any future
+reactivation requires a new user-approved work order, a current Orca compatibility
+review, sandbox/permission verification, worker lifecycle verification, and fresh
+end-to-end validation before production use.
